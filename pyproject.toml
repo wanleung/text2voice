@@ -42,6 +42,7 @@ dependencies = [
     "pydantic-settings",
     "python-multipart",
     "httpx",
+    "trafilatura",
 ]
 
 [dependency-groups]

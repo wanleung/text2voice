@@ -24,9 +24,29 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8020
 On NVIDIA hardware, replace the ROCm pins in `pyproject.toml` (torch, torchaudio, triton, rocm*) with
 CUDA builds of torch/torchaudio.
 
-Run it permanently with the systemd user unit in `deploy/text2voice.service`. Settings go in `.env`
+Run it permanently with the systemd user unit in `deploy/text2voice.service`. The unit listens on
+all interfaces, so set `T2V_API_KEY` in `.env` first (`python3 -c "import secrets;
+print(secrets.token_urlsafe(32))"` makes a good key). Every API call then needs
+`Authorization: Bearer <key>` or `X-API-Key: <key>`. Settings go in `.env`
 (see `.env.example`). Interactive API docs are at `http://localhost:8020/docs`, and the
 machine-readable schema is at `/openapi.json`.
+
+## Web portal
+
+Open `http://<host>:8020/` and sign in with the API key. The key is kept in an HttpOnly cookie,
+so audio streams and downloads work like normal links.
+
+- **Library:** everything you've converted, newest first, with title, source site, duration,
+  languages and live progress for running jobs. Play items in the bottom player, search by title or
+  source, and click an item to rename it, download it, read the text that was spoken, delete it,
+  or share it.
+- **New:** paste a URL (Preview shows the extracted article so you can trim it) or paste
+  text/Markdown, then pick the voice, language, speed and format.
+- **Share:** creates an unguessable link (`/s/<token>`) that plays and downloads the audio
+  without the API key. Revoke it at any time.
+- **Voices:** play the reference clips, upload new voices and delete them.
+
+Library items are kept until you delete them. `T2V_JOB_TTL_HOURS` turns on automatic expiry.
 
 ## API
 
@@ -34,10 +54,14 @@ machine-readable schema is at `/openapi.json`.
 |---|---|---|
 | `POST` | `/v1/tts` | Synchronous TTS for text up to 5,000 chars. Returns audio. |
 | `POST` | `/v1/audio/speech` | OpenAI-compatible version of the above. |
-| `POST` | `/v1/jobs` | Queue a whole article (up to 200k chars). Returns `202` with a job. |
+| `POST` | `/v1/jobs` | Queue an article from `text` or a `url` (up to 200k chars). Returns `202` with a job. |
+| `POST` | `/v1/fetch` | Preview the article text that would be extracted from a `url`. |
+| `GET` | `/v1/jobs?q=` | The library, newest first, optionally filtered by title or source. |
 | `GET` | `/v1/jobs/{id}` | Job status and progress. |
-| `GET` | `/v1/jobs/{id}/audio` | Download the finished audio. |
-| `DELETE` | `/v1/jobs/{id}` | Delete a finished job. |
+| `GET` | `/v1/jobs/{id}/audio` | The finished audio. Add `?download=true` to get it as an attachment. |
+| `GET` | `/v1/jobs/{id}/text` | The text that was read aloud. |
+| `PATCH` | `/v1/jobs/{id}` | `{"title": …}` renames; `{"shared": true/false}` creates or revokes the share link. |
+| `DELETE` | `/v1/jobs/{id}` | Delete a job, unless it's currently running. |
 | `GET/POST/DELETE` | `/v1/voices` | List, upload or delete reference voices. |
 | `GET` | `/health` | Model and device info. |
 
@@ -74,8 +98,12 @@ curl -s localhost:8020/v1/jobs/<id>            # status: queued | running | done
 curl -s localhost:8020/v1/jobs/<id>/audio -o article.mp3
 ```
 
+Pass `"url": "https://…"` instead of `text` to have the service fetch the page and extract the
+article. Code blocks, navigation, and paragraphs the site duplicates are dropped. Only public
+addresses can be fetched, so the service can't be pointed at your internal network.
+
 If you pass `callback_url`, the service POSTs the final job JSON to it when the job finishes, so
-you don't have to poll. Jobs and their audio are deleted after `T2V_JOB_TTL_HOURS` (72 by default).
+you don't have to poll.
 
 ### OpenAI-compatible
 
@@ -98,7 +126,7 @@ service.
 
 | Tool | What it does |
 |---|---|
-| `text_to_speech` | Reads `text` or a local `text_file` aloud, saves the audio file and returns its path, duration and the languages used. Short text is synthesized directly. Longer text runs as a background job that reports MCP progress while you wait. With `wait=false` it returns a `job_id` immediately. |
+| `text_to_speech` | Reads `text`, a local `text_file` or a web `url` aloud, saves the audio file and returns its path, duration and the languages used. Results go into the web library under `title`; pass `save_to_library=false` for throwaway clips. It reports MCP progress while it waits. With `wait=false` it returns a `job_id` immediately. |
 | `get_tts_job` | Checks a job started with `wait=false`. Once it's done, saves the audio and returns its path. |
 | `list_tts_voices` | Lists the available voices. |
 | `add_tts_voice` | Registers a new voice from a local 3–30 s recording plus its transcript. |
@@ -107,7 +135,7 @@ Register it with Claude Code:
 
 ```bash
 claude mcp add text2voice --scope user \
-  -e T2V_URL=http://127.0.0.1:8020 -e T2V_OUTPUT_DIR=$HOME/text2voice-audio \
+  -e T2V_URL=http://127.0.0.1:8020 -e T2V_API_KEY=<key> -e T2V_OUTPUT_DIR=$HOME/text2voice-audio \
   -- uv run --script $HOME/Projects/text2voice/mcp_server/text2voice_mcp.py
 ```
 
@@ -137,7 +165,8 @@ MCP server settings:
 - `T2V_OUTPUT_DIR`: where audio files are saved. Defaults to `~/text2voice-audio`.
 - `T2V_WAIT_TIMEOUT`: how long to wait for a job before returning its `job_id` instead.
   Defaults to 3600 s.
-- `T2V_SYNC_LIMIT`: texts longer than this go through a background job. Defaults to 5000 chars.
+- `T2V_SYNC_LIMIT`: with `save_to_library=false`, texts up to this length skip the job queue.
+  Defaults to 5000 chars.
 
 Audio files are saved on the machine where the MCP server runs.
 
@@ -188,6 +217,12 @@ time. A 10-minute article takes roughly 7–9 minutes to synthesize.
 uv run --group dev pytest       # API tests swap the model for a fake engine, so no GPU is needed
 ```
 
-Layout: `app/text.py` (markup cleanup, sentence splitting, language detection), `app/engine.py`
-(CosyVoice wrapper), `app/jobs.py` (background queue), `app/voices.py` (voice registry),
-`app/main.py` (FastAPI routes).
+Layout:
+
+- `app/text.py`: markup cleanup, sentence splitting and language detection.
+- `app/fetch.py`: URL fetching and article extraction.
+- `app/engine.py`: the CosyVoice wrapper.
+- `app/jobs.py`: the background queue and library.
+- `app/voices.py`: the voice registry.
+- `app/main.py`: FastAPI routes.
+- `app/static/`: the portal and share pages.

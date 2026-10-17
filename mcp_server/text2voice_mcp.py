@@ -15,7 +15,7 @@ Environment:
     T2V_API_KEY           API key, if the service requires one
     T2V_OUTPUT_DIR        where audio files are saved (default ~/text2voice-audio)
     T2V_WAIT_TIMEOUT      seconds to wait for a long article before returning its job id (default 3600)
-    T2V_SYNC_LIMIT        texts longer than this many characters go through a background job (default 5000)
+    T2V_SYNC_LIMIT        with save_to_library=false, texts up to this many characters skip the job queue (default 5000)
 """
 import argparse
 import asyncio
@@ -38,7 +38,6 @@ API_KEY = os.environ.get("T2V_API_KEY", "")
 OUTPUT_DIR = Path(os.environ.get("T2V_OUTPUT_DIR", "~/text2voice-audio")).expanduser()
 WAIT_TIMEOUT = float(os.environ.get("T2V_WAIT_TIMEOUT", "3600"))
 SYNC_LIMIT = int(os.environ.get("T2V_SYNC_LIMIT", "5000"))  # matches the service's T2V_MAX_SYNC_CHARS
-POLL_SECONDS = 3
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -47,6 +46,7 @@ Format = Literal["mp3", "wav", "flac", "opus"]
 
 class SpeechResult(TypedDict):
     status: str  # done | queued | running
+    title: NotRequired[str]  # library title
     path: NotRequired[str]  # absolute path of the saved audio file, when done
     duration_seconds: NotRequired[float]
     languages: NotRequired[list[str]]
@@ -130,80 +130,96 @@ async def _download_job(client: httpx.AsyncClient, job: dict, path: Path) -> Spe
     _raise_for_status(r)
     return {
         "status": "done",
+        "title": job["title"],
         "path": _save(path, r.content),
         "duration_seconds": job["duration_seconds"],
+        "languages": job["languages"],
         "size_bytes": len(r.content),
         "job_id": job["id"],
     }
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Text to speech", readOnlyHint=False, openWorldHint=False))
+@mcp.tool(annotations=ToolAnnotations(title="Text to speech", readOnlyHint=False, openWorldHint=True))
 async def text_to_speech(
     ctx: Context,
     text: str = "",
     text_file: str = "",
+    url: str = "",
+    title: str = "",
     language: Language = "auto",
     voice: str = "",
     speed: float = 1.0,
     format: Format = "mp3",
     output_path: str = "",
     wait: bool = True,
+    save_to_library: bool = True,
 ) -> SpeechResult:
-    """Convert text or an article to speech and save it as an audio file.
+    """Convert text, a local file or a web article to speech and save it as an audio file.
 
     Args:
-        text: Text or Markdown to read aloud. Give either this or text_file.
-        text_file: Path to a local text/Markdown file to read aloud instead of passing text.
+        text: Text or Markdown to read aloud. Give exactly one of text, text_file or url.
+        text_file: Path to a local text/Markdown file to read aloud.
+        url: Web article to fetch; the service extracts the article text (no menus, ads or code).
+        title: Title in the user's audio library; defaults to the page title or the first line.
         language: "auto" (per sentence: CJK -> Cantonese, else English), "en", "yue" (Cantonese) or "zh" (Mandarin).
         voice: Voice name from list_tts_voices; empty uses the service default.
         speed: Speaking rate, 0.5 to 2.0.
         format: Audio format of the saved file.
         output_path: Where to save the audio; defaults to a timestamped file in T2V_OUTPUT_DIR.
-        wait: For long text, wait for synthesis to finish. If false, returns a job_id to pass to get_tts_job.
+        wait: Wait for synthesis to finish (about as long as the audio lasts). If false, returns a
+            job_id to pass to get_tts_job.
+        save_to_library: Keep the result in the user's text2voice web library (default). Set false
+            for throwaway clips.
 
-    Returns the saved file's path and duration, or a job_id if the job is still running.
+    Returns the saved file's path, duration and languages, or a job_id if it is still running.
     """
-    if bool(text) == bool(text_file):
-        raise ToolError("provide exactly one of text or text_file")
+    if sum(map(bool, (text, text_file, url))) != 1:
+        raise ToolError("provide exactly one of text, text_file or url")
     if text_file:
         text = _read(text_file)
-    if not text.strip():
+    if not (url or text.strip()):
         raise ToolError("text is empty")
     if not 0.5 <= speed <= 2.0:
         raise ToolError("speed must be between 0.5 and 2.0")
-    path = _output_path(output_path, text, format)
-    body = {"text": text, "language": language, "speed": speed, "format": format}
+    body = {"language": language, "speed": speed, "format": format}
     if voice:
         body["voice"] = voice
 
     async with _client() as client:
-        if len(text) <= SYNC_LIMIT and wait:
-            r = await client.post("/v1/tts", json=body)
+        if not save_to_library and not url and len(text) <= SYNC_LIMIT and wait:
+            r = await client.post("/v1/tts", json={**body, "text": text})
             if r.status_code != 413:  # 413: service has a lower sync limit; fall through to a job
                 _raise_for_status(r)
                 return {
                     "status": "done",
-                    "path": _save(path, r.content),
+                    "path": _save(_output_path(output_path, title or text, format), r.content),
                     "duration_seconds": float(r.headers.get("x-audio-duration", 0)),
                     "languages": r.headers.get("x-languages", "").split(","),
                     "size_bytes": len(r.content),
                 }
 
-        r = await client.post("/v1/jobs", json={**body, "metadata": {"output_path": str(path)}})
+        source = {"url": url} if url else {"text": text}
+        # An explicit output_path is remembered in the job so get_tts_job saves to the same place.
+        metadata = {"output_path": output_path} if output_path else {}
+        r = await client.post("/v1/jobs", json={**body, **source, "title": title, "metadata": metadata})
         _raise_for_status(r)
         job = r.json()
+        path = _output_path(output_path, job["title"], format)
         if not wait:
-            return {"status": job["status"], "job_id": job["id"],
+            return {"status": job["status"], "job_id": job["id"], "title": job["title"],
                     "note": "call get_tts_job with this job_id to check progress and fetch the audio"}
 
         deadline = time.monotonic() + WAIT_TIMEOUT
+        polls = 0
         while job["status"] in ("queued", "running"):
             if time.monotonic() > deadline:
-                return {"status": job["status"], "job_id": job["id"], "progress": job["progress"],
+                return {"status": job["status"], "job_id": job["id"], "title": job["title"],
+                        "progress": job["progress"],
                         "note": f"still running after {WAIT_TIMEOUT:.0f}s; call get_tts_job later"}
             await ctx.report_progress(job["segments_done"], job["segments_total"],
                                       f"{job['status']}: {job['segments_done']}/{job['segments_total']} segments")
-            await asyncio.sleep(POLL_SECONDS)
+            await asyncio.sleep(1 if polls < 10 else 3)  # short clips finish in seconds
+            polls += 1
             r = await client.get(f"/v1/jobs/{job['id']}")
             _raise_for_status(r)
             job = r.json()
@@ -230,7 +246,7 @@ async def get_tts_job(job_id: str, output_path: str = "") -> SpeechResult:
             return {"status": job["status"], "job_id": job_id, "progress": job["progress"],
                     "queue_position": job.get("queue_position")}
         planned = output_path or job["metadata"].get("output_path") or ""
-        return await _download_job(client, job, _output_path(planned, job_id, job["format"]))
+        return await _download_job(client, job, _output_path(planned, job["title"], job["format"]))
 
 
 @mcp.tool(annotations=ToolAnnotations(title="List TTS voices", readOnlyHint=True))

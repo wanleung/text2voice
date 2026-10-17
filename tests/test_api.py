@@ -109,3 +109,82 @@ def test_api_key(client, monkeypatch):
     assert client.post("/v1/tts", json={"text": "Hi."}).status_code == 401
     assert client.post("/v1/tts", json={"text": "Hi."}, headers={"Authorization": "Bearer s3cret"}).status_code == 200
     assert client.post("/v1/tts", json={"text": "Hi."}, headers={"X-API-Key": "s3cret"}).status_code == 200
+
+
+def wait_done(client, job_id):
+    for _ in range(100):
+        job = client.get(f"/v1/jobs/{job_id}").json()
+        if job["status"] in ("done", "failed"):
+            return job
+        time.sleep(0.05)
+    raise AssertionError("job did not finish")
+
+
+def test_library_title_text_rename_and_search(client):
+    job = client.post("/v1/jobs", json={"text": "# 標題\n\nBody text.", "source_url": "https://example.com/a"}).json()
+    assert job["title"] == "標題" and job["languages"] == ["en", "yue"]
+    wait_done(client, job["id"])
+    assert client.get(f"/v1/jobs/{job['id']}/text").json()["text"] == "# 標題\n\nBody text."
+    assert client.patch(f"/v1/jobs/{job['id']}", json={"title": "Renamed"}).json()["title"] == "Renamed"
+    assert [j["id"] for j in client.get("/v1/jobs?q=renam").json()["jobs"]] == [job["id"]]
+    assert [j["id"] for j in client.get("/v1/jobs?q=example.com").json()["jobs"]] == [job["id"]]
+    assert client.get("/v1/jobs?q=nomatch").json()["jobs"] == []
+    r = client.get(f"/v1/jobs/{job['id']}/audio?download=true")
+    assert r.headers["content-disposition"].startswith("attachment") and "Renamed.mp3" in r.headers["content-disposition"]
+
+
+def test_job_request_validation(client):
+    assert client.post("/v1/jobs", json={"text": "a", "url": "https://x.y"}).status_code == 422
+    assert client.post("/v1/jobs", json={}).status_code == 422
+    assert client.post("/v1/jobs", json={"text": "a", "source_url": "javascript:alert(1)"}).status_code == 422
+
+
+def test_job_from_url(client, monkeypatch):
+    from app.fetch import Article
+
+    async def fake_fetch(url):
+        return Article(title="Fetched title", text="# Fetched title\n\n第一段。", url=url)
+
+    monkeypatch.setattr(main, "fetch_article", fake_fetch)
+    preview = client.post("/v1/fetch", json={"url": "https://news.example/x"}).json()
+    assert preview["title"] == "Fetched title"
+    job = client.post("/v1/jobs", json={"url": "https://news.example/x"}).json()
+    assert job["title"] == "Fetched title" and job["source_url"] == "https://news.example/x"
+
+
+def test_fetch_refuses_private_addresses(client):
+    for url in ("http://127.0.0.1:8020/health", "http://localhost/", "file:///etc/passwd"):
+        r = client.post("/v1/fetch", json={"url": url})
+        assert r.status_code == 422, url
+
+
+def test_share_link(client, monkeypatch):
+    job = client.post("/v1/jobs", json={"text": "Share me.", "title": "Share <me> & you"}).json()
+    wait_done(client, job["id"])
+    shared = client.patch(f"/v1/jobs/{job['id']}", json={"shared": True}).json()
+    link = shared["share_url"]
+    monkeypatch.setattr(settings, "api_key", "s3cret")  # share pages work without the key
+    page = client.get(link)
+    assert page.status_code == 200 and "Share &lt;me&gt; &amp; you" in page.text and "<me>" not in page.text
+    assert client.get(link + "/audio").status_code == 200
+    assert client.get(f"/v1/jobs/{job['id']}/audio").status_code == 401
+    monkeypatch.setattr(settings, "api_key", "")
+    client.patch(f"/v1/jobs/{job['id']}", json={"shared": False})
+    assert client.get(link).status_code == 404
+
+
+def test_portal_login_cookie(client, monkeypatch):
+    assert "text2voice" in client.get("/").text
+    monkeypatch.setattr(settings, "api_key", "s3cret")
+    assert client.get("/v1/session").json() == {"auth_required": True, "authenticated": False}
+    assert client.post("/v1/login", json={"api_key": "wrong"}).status_code == 401
+    assert client.post("/v1/login", json={"api_key": "s3cret"}).status_code == 200
+    assert client.get("/v1/session").json()["authenticated"] is True
+    assert client.get("/v1/jobs").status_code == 200  # cookie authenticates
+    client.post("/v1/logout")
+    assert client.get("/v1/jobs").status_code == 401
+
+
+def test_voice_preview_audio(client):
+    r = client.get("/v1/voices/default/audio")
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav"

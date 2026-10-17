@@ -1,7 +1,8 @@
-"""Background synthesis jobs for long articles (one GPU worker, FIFO)."""
+"""Background synthesis jobs (one GPU worker, FIFO). Finished jobs form the audio library."""
 import json
 import logging
 import queue
+import secrets
 import shutil
 import threading
 import time
@@ -37,13 +38,23 @@ class Job:
     error: str | None = None
     callback_url: str | None = None
     metadata: dict = field(default_factory=dict)
+    title: str = ""
+    source_url: str | None = None
+    languages: list[str] = field(default_factory=list)
+    share_token: str | None = None
 
     def public(self) -> dict:
         d = asdict(self)
         d.pop("callback_url")
         d["progress"] = round(self.segments_done / self.segments_total, 3) if self.segments_total else 0
         d["audio_url"] = f"/v1/jobs/{self.id}/audio" if self.status == "done" else None
+        d["share_url"] = f"/s/{self.share_token}" if self.share_token else None
         return d
+
+
+def default_title(segments: list[Segment], limit: int = 60) -> str:
+    first = segments[0].text.rstrip("。.!?！？") if segments else ""
+    return first if len(first) <= limit else first[:limit].rstrip() + "…"
 
 
 class JobManager:
@@ -82,11 +93,15 @@ class JobManager:
 
     # -- API -----------------------------------------------------------------------------
     def submit(self, segments: list[Segment], voice: str, language: str, speed: float, fmt: str,
-               callback_url: str | None, metadata: dict) -> Job:
+               callback_url: str | None, metadata: dict, title: str = "", source_url: str | None = None,
+               text: str = "") -> Job:
         job = Job(id=uuid.uuid4().hex, status="queued", voice=voice, language=language, speed=speed,
                   format=fmt, characters=sum(len(s.text) for s in segments),
-                  segments_total=len(segments), callback_url=callback_url, metadata=metadata)
+                  segments_total=len(segments), callback_url=callback_url, metadata=metadata,
+                  title=title.strip() or default_title(segments), source_url=source_url,
+                  languages=sorted({s.language for s in segments}))
         self._dir(job.id).mkdir(parents=True)
+        (self._dir(job.id) / "text.md").write_text(text, "utf-8")
         self.jobs[job.id] = job
         self.segments[job.id] = segments
         self._save(job)
@@ -98,6 +113,26 @@ class JobManager:
 
     def audio_path(self, job: Job) -> Path:
         return self._dir(job.id) / f"audio.{job.format}"
+
+    def text(self, job: Job) -> str:
+        path = self._dir(job.id) / "text.md"
+        return path.read_text("utf-8") if path.exists() else ""
+
+    def by_share_token(self, token: str) -> Job | None:
+        for job in self.jobs.values():
+            if job.share_token and secrets.compare_digest(job.share_token, token):
+                return job
+        return None
+
+    def update(self, job: Job, title: str | None = None, shared: bool | None = None) -> Job:
+        if title is not None:
+            job.title = title.strip() or job.title
+        if shared is True and not job.share_token:
+            job.share_token = secrets.token_urlsafe(16)
+        elif shared is False:
+            job.share_token = None
+        self._save(job)
+        return job
 
     def queue_position(self, job_id: str) -> int | None:
         queued = list(self.queue.queue)
@@ -156,6 +191,8 @@ class JobManager:
             log.warning("callback for job %s to %s failed: %s", job.id, job.callback_url, e)
 
     def _cleanup(self) -> None:
+        if settings.job_ttl_hours <= 0:  # keep the library forever
+            return
         cutoff = time.time() - settings.job_ttl_hours * 3600
         for job in list(self.jobs.values()):
             if job.finished_at and job.finished_at < cutoff:

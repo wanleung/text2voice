@@ -33,3 +33,16 @@ def test_same_language_sentences_are_merged():
 def test_forced_language_keeps_whole_paragraphs():
     segs = prepare("Hello. 你好。", language="yue")
     assert [(s.text, s.language) for s in segs] == [("Hello. 你好。", "yue")]
+
+
+def test_article_extraction_dedupes_and_drops_code():
+    from app.fetch import extract
+    body = """<p>First paragraph of the article, long enough to count.</p>
+<pre><code>Get-MgUser -All | Export-Csv users.csv</code></pre>
+<p>Second paragraph mentions the 郵箱 setting in some detail here.</p>"""
+    html = f"""<html><head><title>My Title</title></head><body><article><h1>My Title</h1>{body}
+<h1>My Title</h1>{body.replace("郵箱", "信箱")}</article></body></html>"""
+    a = extract(html, "https://example.com/post")
+    assert a.title == "My Title"
+    assert a.text.count("First paragraph") == 1 and a.text.count("Second paragraph") == 1
+    assert "Get-MgUser" not in a.text and a.text.count("My Title") == 1

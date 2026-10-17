@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     max_sync_chars: int = 5000
     max_job_chars: int = 200_000
     paragraph_pause_ms: int = 500
-    job_ttl_hours: int = 72
+    # Delete finished jobs (library items) after this many hours; 0 keeps them until deleted.
+    job_ttl_hours: int = 0
 
 
 settings = Settings()

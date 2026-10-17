@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{{title}}</title>
+<meta property="og:title" content="{{title}}">
+<meta property="og:type" content="music.song">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .share { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+  .share .card { width: min(560px, 100%); padding: 24px; display: grid; gap: 14px; }
+  .share h1 { font-size: 20px; margin: 0; line-height: 1.35; }
+  .share audio { width: 100%; }
+  .share .foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="share">
+  <div class="card">
+    <div class="brand"><span class="logo"></span>text2voice</div>
+    <h1>{{title}}</h1>
+    <audio controls preload="metadata" src="/s/{{token}}/audio"></audio>
+    <div class="foot">
+      <span class="muted small" id="src" data-src="{{source}}"></span>
+      <a class="button" href="/s/{{token}}/audio?download=true">Download</a>
+    </div>
+  </div>
+</div>
+<script>
+  const src = document.getElementById("src").dataset.src;
+  if (src) {
+    const a = document.createElement("a");
+    a.href = src; a.target = "_blank"; a.rel = "noopener noreferrer";
+    try { a.textContent = "Source: " + new URL(src).hostname; } catch { a.textContent = "Source"; }
+    document.getElementById("src").append(a);
+  }
+</script>
+</body>
+</html>

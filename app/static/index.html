@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>text2voice</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%233b6ef5' d='M3 10v4h4l5 5V5L7 10H3zm13.5 2A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="login-form" class="card login-card">
+    <div class="brand big"><span class="logo"></span>text2voice</div>
+    <p class="muted">Enter the service API key to open your library.</p>
+    <input id="login-key" type="password" placeholder="API key" autocomplete="current-password" required>
+    <button class="primary" type="submit">Sign in</button>
+    <p id="login-error" class="error" hidden></p>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand"><span class="logo"></span>text2voice</div>
+    <nav class="tabs">
+      <button data-tab="library" class="tab active">Library</button>
+      <button data-tab="voices" class="tab">Voices</button>
+    </nav>
+    <input id="search" class="search" type="search" placeholder="Search library">
+    <button id="new-btn" class="primary">+ New</button>
+    <button id="logout-btn" class="ghost" title="Sign out">Sign out</button>
+  </header>
+
+  <main>
+    <section id="tab-library">
+      <div id="library" class="list"></div>
+      <div id="library-empty" class="empty" hidden>
+        <p>No audio yet.</p>
+        <button class="primary" onclick="openNew()">Convert your first article</button>
+      </div>
+    </section>
+
+    <section id="tab-voices" hidden>
+      <div class="section-head">
+        <h2>Voices</h2>
+        <button class="primary" onclick="openVoiceDialog()">+ Add voice</button>
+      </div>
+      <p class="muted">Cantonese is always spoken with instruct mode; the voice provides the timbre. English and Mandarin clone the voice fully when it was recorded in that language.</p>
+      <div id="voices" class="grid"></div>
+    </section>
+  </main>
+
+  <div id="player-bar" class="player-bar" hidden>
+    <div class="player-info">
+      <div id="player-title" class="player-title"></div>
+      <div id="player-sub" class="muted small"></div>
+    </div>
+    <audio id="player" controls preload="metadata"></audio>
+    <button class="ghost player-close" onclick="closePlayer()" title="Close player">✕</button>
+  </div>
+</div>
+
+<!-- New conversion -->
+<dialog id="new-dialog">
+  <form method="dialog" class="dialog" id="new-form">
+    <h2>New audio</h2>
+    <div class="seg">
+      <button type="button" data-src="url" class="seg-btn active">From URL</button>
+      <button type="button" data-src="text" class="seg-btn">Paste text</button>
+    </div>
+    <div id="src-url">
+      <div class="row">
+        <input id="new-url" type="url" placeholder="https://example.com/article">
+        <button type="button" id="fetch-btn">Preview</button>
+      </div>
+      <p class="muted small">The article text is extracted automatically. Preview lets you check and trim it first.</p>
+    </div>
+    <label>Title <input id="new-title" placeholder="Optional; defaults to the page title or first line"></label>
+    <label id="text-label" hidden>Text <span class="muted small" id="char-count"></span>
+      <textarea id="new-text" rows="10" placeholder="Paste plain text or Markdown"></textarea>
+    </label>
+    <div class="opts">
+      <label>Voice <select id="new-voice"></select></label>
+      <label>Language
+        <select id="new-lang">
+          <option value="auto">Auto (EN / 粵語)</option>
+          <option value="yue">Cantonese 粵語</option>
+          <option value="en">English</option>
+          <option value="zh">Mandarin 普通話</option>
+        </select>
+      </label>
+      <label>Speed <span id="speed-val">1.0×</span>
+        <input id="new-speed" type="range" min="0.5" max="2" step="0.1" value="1">
+      </label>
+      <label>Format
+        <select id="new-format"><option>mp3</option><option>opus</option><option>wav</option><option>flac</option></select>
+      </label>
+    </div>
+    <p id="new-error" class="error" hidden></p>
+    <div class="actions">
+      <button value="cancel" formnovalidate class="ghost">Cancel</button>
+      <button type="button" id="convert-btn" class="primary">Convert</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Item details -->
+<dialog id="item-dialog">
+  <div class="dialog">
+    <textarea id="item-title" class="title-input" rows="2" aria-label="Title (click to rename)"></textarea>
+    <div id="item-meta" class="muted small"></div>
+    <div class="actions left">
+      <button class="primary" id="item-play">▶ Play</button>
+      <a class="button" id="item-download">Download</a>
+      <button id="item-share">Share</button>
+      <button class="danger" id="item-delete">Delete</button>
+    </div>
+    <div id="item-share-box" class="share-box" hidden>
+      <input id="item-share-url" readonly>
+      <button id="item-copy">Copy</button>
+      <button class="ghost" id="item-unshare">Revoke</button>
+    </div>
+    <details>
+      <summary>Text</summary>
+      <pre id="item-text" class="text"></pre>
+    </details>
+    <div class="actions"><button class="ghost" autofocus onclick="itemDialog.close()">Close</button></div>
+  </div>
+</dialog>
+
+<!-- Add voice -->
+<dialog id="voice-dialog">
+  <form class="dialog" id="voice-form">
+    <h2>Add voice</h2>
+    <p class="muted small">3–30 seconds of clean speech from one speaker, plus the exact words spoken. Only use voices you have permission to clone.</p>
+    <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" placeholder="e.g. cantonese-female"></label>
+    <label>Language spoken in the clip
+      <select name="language"><option value="yue">Cantonese</option><option value="en">English</option><option value="zh">Mandarin</option></select>
+    </label>
+    <label>Transcript <textarea name="transcript" rows="3" required></textarea></label>
+    <label>Description <input name="description" placeholder="Optional"></label>
+    <label>Audio file <input name="audio" type="file" accept="audio/*" required></label>
+    <p id="voice-error" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" class="ghost" onclick="voiceDialog.close()">Cancel</button>
+      <button class="primary" type="submit">Add voice</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

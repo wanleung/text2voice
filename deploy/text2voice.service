@@ -8,8 +8,9 @@ After=network-online.target
 
 [Service]
 WorkingDirectory=%h/Projects/text2voice
-ExecStart=%h/.local/bin/uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8020
-# To serve other machines, use --host 0.0.0.0 and set T2V_API_KEY in .env.
+# Listens on all interfaces: set T2V_API_KEY in .env (the service reads it at startup).
+# Use --host 127.0.0.1 to keep it local-only.
+ExecStart=%h/.local/bin/uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8020 --proxy-headers
 Restart=on-failure
 RestartSec=10
 
