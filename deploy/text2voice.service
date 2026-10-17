@@ -1,0 +1,17 @@
+# systemd user service. Install with:
+#   mkdir -p ~/.config/systemd/user && cp deploy/text2voice.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now text2voice
+#   loginctl enable-linger $USER   # keep it running when logged out
+[Unit]
+Description=text2voice TTS web service (CosyVoice)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/Projects/text2voice
+ExecStart=%h/.local/bin/uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8020
+# To serve other machines, use --host 0.0.0.0 and set T2V_API_KEY in .env.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

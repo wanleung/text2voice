@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+pretrained_models/
+data/
+# user-registered voices (the bundled default voice is tracked)
+voices/*
+!voices/default/
