@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        # The CosyVoice submodule isn't needed: API tests replace the model with a fake engine.
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # uv.lock pins AMD's ROCm (gfx1151) PyTorch nightlies, which are multi-GB and pointless
+      # without that GPU. Install the CPU build of the same torch release, then everything else
+      # at the exact versions in uv.lock.
+      - name: Install dependencies (CPU PyTorch)
+        run: |
+          uv venv --python 3.12
+          uv pip install torch==2.9.1 torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+          uv export --frozen --no-hashes --group dev --no-emit-project \
+            --no-emit-package torch --no-emit-package torchaudio --no-emit-package triton \
+            --no-emit-package rocm --no-emit-package rocm-sdk-core \
+            --no-emit-package rocm-sdk-libraries-gfx1151 > "$RUNNER_TEMP/requirements.txt"
+          # openai-whisper's setup.py imports pkg_resources, removed in setuptools 81.
+          uv pip install "setuptools<81"
+          uv pip install -r "$RUNNER_TEMP/requirements.txt" --no-build-isolation-package openai-whisper
+
+      - name: Run tests
+        run: .venv/bin/python -m pytest -q
+
+      - name: Check the MCP server script starts
+        run: uv run --script mcp_server/text2voice_mcp.py --help

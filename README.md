@@ -217,6 +217,10 @@ time. A 10-minute article takes roughly 7–9 minutes to synthesize.
 uv run --group dev pytest       # API tests swap the model for a fake engine, so no GPU is needed
 ```
 
+GitHub Actions (`.github/workflows/tests.yml`) runs the tests on every push and pull request. It
+uses CPU PyTorch wheels in place of the locked ROCm builds, and installs everything else at the
+exact versions in `uv.lock`.
+
 Layout:
 
 - `app/text.py`: markup cleanup, sentence splitting and language detection.
