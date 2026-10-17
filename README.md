@@ -89,6 +89,58 @@ client = OpenAI(base_url="http://localhost:8020/v1", api_key="unused-or-T2V_API_
 client.audio.speech.create(model="cosyvoice", voice="default", input="Hello!").write_to_file("hi.mp3")
 ```
 
+## MCP server
+
+`mcp_server/text2voice_mcp.py` exposes the service as MCP tools. It's a thin client: the model
+stays in the web service, so the script only needs `mcp` and `httpx`. `uv` installs those
+automatically from the script's inline metadata. It can run on any machine that can reach the
+service.
+
+| Tool | What it does |
+|---|---|
+| `text_to_speech` | Reads `text` or a local `text_file` aloud, saves the audio file and returns its path, duration and the languages used. Short text is synthesized directly. Longer text runs as a background job that reports MCP progress while you wait. With `wait=false` it returns a `job_id` immediately. |
+| `get_tts_job` | Checks a job started with `wait=false`. Once it's done, saves the audio and returns its path. |
+| `list_tts_voices` | Lists the available voices. |
+| `add_tts_voice` | Registers a new voice from a local 3–30 s recording plus its transcript. |
+
+Register it with Claude Code:
+
+```bash
+claude mcp add text2voice --scope user \
+  -e T2V_URL=http://127.0.0.1:8020 -e T2V_OUTPUT_DIR=$HOME/text2voice-audio \
+  -- uv run --script $HOME/Projects/text2voice/mcp_server/text2voice_mcp.py
+```
+
+For other MCP clients (Claude Desktop, Cursor, custom agents), add an entry like this to their
+JSON config:
+
+```json
+{
+  "mcpServers": {
+    "text2voice": {
+      "command": "uv",
+      "args": ["run", "--script", "/home/you/Projects/text2voice/mcp_server/text2voice_mcp.py"],
+      "env": {"T2V_URL": "http://127.0.0.1:8020", "T2V_OUTPUT_DIR": "/home/you/text2voice-audio"}
+    }
+  }
+}
+```
+
+If your agent connects over HTTP instead of launching a process, run
+`uv run --script mcp_server/text2voice_mcp.py --http --port 8021` and point the agent at
+`http://host:8021/mcp`.
+
+MCP server settings:
+
+- `T2V_URL`: the service URL.
+- `T2V_API_KEY`: the service's API key, if it has one.
+- `T2V_OUTPUT_DIR`: where audio files are saved. Defaults to `~/text2voice-audio`.
+- `T2V_WAIT_TIMEOUT`: how long to wait for a job before returning its `job_id` instead.
+  Defaults to 3600 s.
+- `T2V_SYNC_LIMIT`: texts longer than this go through a background job. Defaults to 5000 chars.
+
+Audio files are saved on the machine where the MCP server runs.
+
 ## Voices
 
 CosyVoice clones a voice from a 3–30 second reference clip together with its exact transcript.
