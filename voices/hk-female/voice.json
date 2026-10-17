@@ -1,0 +1,6 @@
+{
+  "name": "hk-female",
+  "language": "yue",
+  "transcript": "大家好，歡迎收聽今日嘅科技新聞。我哋會為你整理最新嘅消息，等你喺返工途中都可以輕鬆掌握。",
+  "description": "Hong Kong Cantonese female newsreader. Synthetic: designed with Qwen3-TTS-12Hz-1.7B-VoiceDesign (Apache-2.0), not a recording of a real person. Design prompt: 一位三十岁左右的香港女性，用地道流利的粤语（广东话）说话，声音温和清晰，语速适中，像电台新闻主播一样专业亲切。"
+}

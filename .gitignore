@@ -8,3 +8,4 @@ data/
 # user-registered voices (the bundled default voice is tracked)
 voices/*
 !voices/default/
+!voices/hk-female/

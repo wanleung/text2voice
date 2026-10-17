@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     # ROCm only: leave False unless a future MIOpen release is faster than the native kernels.
     use_miopen: bool = False
 
-    default_voice: str = "default"
+    # Synthetic Hong Kong Cantonese voice bundled in voices/hk-female (see README, "Voices").
+    default_voice: str = "hk-female"
     # Language used for CJK text when language="auto".
     auto_chinese_language: str = "yue"
     # Synchronous endpoints reject longer input; use /v1/jobs for whole articles.
