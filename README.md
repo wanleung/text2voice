@@ -226,3 +226,10 @@ Layout:
 - `app/voices.py`: the voice registry.
 - `app/main.py`: FastAPI routes.
 - `app/static/`: the portal and share pages.
+
+## License
+
+Apache-2.0; see `LICENSE`. This project builds on
+[CosyVoice](https://github.com/FunAudioLLM/CosyVoice) (Apache-2.0), which is included as a git
+submodule. The bundled `voices/default/prompt.wav` is CosyVoice's `asset/zero_shot_prompt.wav`.
+Model weights are downloaded separately and are under their own licenses.
