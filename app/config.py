@@ -10,6 +10,8 @@ class Settings(BaseSettings):
 
     # Fun-CosyVoice3 by default; point at pretrained_models/CosyVoice2-0.5B to use CosyVoice 2.
     model_dir: Path = ROOT / "pretrained_models" / "Fun-CosyVoice3-0.5B"
+    # Optional Cantonese fine-tune for pure-Cantonese sentences (scripts/download_models.py --cantonese).
+    yue_model_dir: Path | None = None
     wetext_dir: Path = ROOT / "pretrained_models" / "wetext"
     cosyvoice_dir: Path = ROOT / "third_party" / "CosyVoice"
     voices_dir: Path = ROOT / "voices"

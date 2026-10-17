@@ -1,6 +1,7 @@
 """API tests with the model replaced by a sine-wave generator (no GPU needed)."""
 import io
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -15,6 +16,8 @@ from app.voices import VoiceStore
 class FakeEngine:
     kind = "Fake"
     sample_rate = 24000
+    main = SimpleNamespace(name="fake-model")
+    yue = None
 
     def __init__(self, voices):
         self.voices = voices
@@ -42,6 +45,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "voices_dir", voices_dir)
     monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
     monkeypatch.setattr(settings, "api_key", "")
+    monkeypatch.setattr(settings, "default_voice", "default")  # independent of the local .env
     monkeypatch.setattr(main, "TTSEngine", FakeEngine)
     with TestClient(main.app) as c:
         yield c

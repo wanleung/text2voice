@@ -9,6 +9,11 @@ Why CosyVoice and not Qwen3-TTS: the open Qwen3-TTS models support 10 languages 
 Sichuan dialect speakers, but not Cantonese. CosyVoice 2 and 3 both speak Cantonese, and in testing
 Fun-CosyVoice3 was the more accurate of the two.
 
+For the most natural Cantonese, the service can also load
+[CosyVoice2-Yue-ZoengJyutGaai](https://huggingface.co/ASLP-lab/Cosyvoice2-Yue-ZoengJyutGaai), a
+Cantonese fine-tune, and route sentences between the two models. See
+[Cantonese quality](#cantonese-quality).
+
 ## Setup
 
 Tested on an AMD Ryzen AI Max+ 395 (Radeon 8060S, gfx1151) with ROCm PyTorch wheels from AMD's
@@ -17,7 +22,7 @@ Tested on an AMD Ryzen AI Max+ 395 (Radeon 8060S, gfx1151) with ROCm PyTorch whe
 ```bash
 git submodule update --init --recursive
 uv sync
-uv run python scripts/download_models.py          # add --cosyvoice2 to also fetch CosyVoice2-0.5B
+uv run python scripts/download_models.py --cantonese   # omit --cantonese to skip the Cantonese fine-tune
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8020
 ```
 
@@ -170,23 +175,42 @@ MCP server settings:
 
 Audio files are saved on the machine where the MCP server runs.
 
+## Cantonese quality
+
+Set `T2V_YUE_MODEL_DIR=pretrained_models/CosyVoice2-Yue-ZoengJyutGaai` in `.env` after
+downloading with `--cantonese`. Each sentence is then routed to one of the two models:
+
+| Sentence | Model | Mode |
+|---|---|---|
+| Cantonese, no English words | CosyVoice2-Yue-ZoengJyutGaai | zero-shot clone of a Cantonese voice, or instruct mode for other voices |
+| Cantonese with English words | Fun-CosyVoice3 | instruct mode ("speak Cantonese") plus the voice's timbre |
+| English or Mandarin | Fun-CosyVoice3 | zero-shot clone if the voice speaks that language, otherwise cross-lingual |
+
+This split comes from a test on six Hong Kong Cantonese sentences (colloquial, formal news, and
+English mixed in):
+
+- **Accuracy** was measured as the character error rate when two Cantonese recognisers (Whisper
+  large-v3 and `alvanlii/whisper-small-cantonese`) transcribe the output back.
+- **Naturalness** was judged in a blind listening test. The fine-tune won on every pure-Cantonese
+  sentence. Fun-CosyVoice3 won on the sentence with English words, which the fine-tune garbles
+  ("Microsoft 365" came out as 北福365).
+
+| Setup | Character errors |
+|---|---|
+| Fun-CosyVoice3 + Mandarin sample voice (the old default) | 6.5% |
+| CosyVoice2-Yue-ZoengJyutGaai alone, native voice | 10.1% |
+| **Routed, native Cantonese voice** | **6.5%**, rated most natural |
+| Fun-CosyVoice3 cloning a Cantonese clip zero-shot | 41–49% (why the main model uses instruct mode for Cantonese) |
+
+**The voice matters as much as the model.** The bundled `default` voice is a Mandarin speaker, which
+makes Cantonese sound accented. Register a native Hong Kong Cantonese clip and make it the
+default with `T2V_DEFAULT_VOICE`. English reads cleanly in a Cantonese voice: an English
+paragraph scored 0% word errors with both voices.
+
 ## Voices
 
-CosyVoice clones a voice from a 3–30 second reference clip together with its exact transcript.
-How each sentence is spoken depends on the voice:
-
-| Target language | Voice recorded in… | Mode used |
-|---|---|---|
-| Cantonese | any language | instruct mode: "speak Cantonese" plus the voice's timbre |
-| English or Mandarin | the same language | zero-shot clone: best quality, keeps the speaker's accent and prosody |
-| English or Mandarin | a different language | cross-lingual: the voice's timbre only |
-
-Cantonese always uses instruct mode. In testing, zero-shot cloning from a Cantonese clip drifted
-toward Mandarin and garbled words, while instruct mode stayed accurate (checked by Whisper
-large-v3 transcription).
-
-The bundled `default` voice is a Mandarin-speaking female sample from CosyVoice. For the most
-natural results, register a clean native-speaker clip for each language:
+CosyVoice clones a voice from a 3–30 second reference clip together with its exact transcript. For
+the most natural results, register a clean native-speaker clip:
 
 ```bash
 curl -s localhost:8020/v1/voices -F name=cantonese-f -F language=yue \
@@ -196,7 +220,8 @@ curl -s localhost:8020/v1/voices -F name=english-m -F language=en \
 ```
 
 Then pass `"voice": "cantonese-f"` for Cantonese articles and `"voice": "english-m"` for English
-ones. Only clone voices you have permission to use.
+ones, or set one as `T2V_DEFAULT_VOICE`. Only clone voices you have permission to use, and check
+the license of public speech datasets. Many, including WSYue-TTS-eval, are non-commercial.
 
 ## Performance
 

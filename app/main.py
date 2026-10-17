@@ -147,7 +147,8 @@ def health():
     return {
         "status": "ok",
         "model": engine.kind,
-        "model_dir": str(settings.model_dir.name),
+        "model_dir": engine.main.name,
+        "cantonese_model": engine.yue.name if engine.yue else None,
         "sample_rate": engine.sample_rate,
         "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
         "queued_jobs": state["jobs"].queue.qsize(),

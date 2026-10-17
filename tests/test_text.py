@@ -46,3 +46,11 @@ def test_article_extraction_dedupes_and_drops_code():
     assert a.title == "My Title"
     assert a.text.count("First paragraph") == 1 and a.text.count("Second paragraph") == 1
     assert "Get-MgUser" not in a.text and a.text.count("My Title") == 1
+
+
+def test_cantonese_model_routing():
+    from app.engine import use_yue_model
+    assert use_yue_model("今日天氣好熱，我哋去飲茶啦。", "yue")
+    assert not use_yue_model("我哋會用Microsoft 365。", "yue")  # English words stay on the main model
+    assert not use_yue_model("Hello there.", "en")
+    assert not use_yue_model("今日天氣好熱。", "zh")
