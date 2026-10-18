@@ -41,8 +41,10 @@ jobs:
           uv pip install "setuptools<81"
           uv pip install -r "$RUNNER_TEMP/requirements.txt" --no-build-isolation-package openai-whisper
 
+      # pytest-github-actions-annotate-failures turns failures into annotations, which GitHub
+      # shows without signing in (job logs need a GitHub login).
       - name: Run tests
-        run: .venv/bin/python -m pytest -q
+        run: .venv/bin/python -m pytest -q -rf
 
       - name: Check the MCP server script starts
         run: uv run --script mcp_server/text2voice_mcp.py --help

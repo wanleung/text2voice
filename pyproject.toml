@@ -47,7 +47,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "pytest-github-actions-annotate-failures"]
 
 [tool.uv]
 package = false
