@@ -1,0 +1,6 @@
+{
+  "name": "hk-male",
+  "language": "yue",
+  "transcript": "大家好，歡迎收聽今日嘅新聞，我哋而家為你整理最新嘅消息。",
+  "description": "Hong Kong Cantonese male, conversational, about 30. Synthetic: designed with Qwen3-TTS-12Hz-1.7B-VoiceDesign (Apache-2.0), not a recording of a real person. Design prompt: 香港男性，三十岁，讲标准的香港粤语，像在跟朋友解释科技新闻一样自然，声音中等音高，清楚有活力。"
+}

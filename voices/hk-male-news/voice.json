@@ -1,0 +1,6 @@
+{
+  "name": "hk-male-news",
+  "language": "yue",
+  "transcript": "大家好，歡迎收聽今日嘅科技新聞。我哋會為你整理最新嘅消息，等你喺返工途中都可以輕鬆掌握。",
+  "description": "Hong Kong Cantonese male newsreader, about 40. Deeper voices like this one sometimes drift toward Mandarin on sentences containing English words (4 of 7 test takes); prefer hk-male for English-heavy articles. Synthetic: designed with Qwen3-TTS-12Hz-1.7B-VoiceDesign (Apache-2.0), not a recording of a real person. Design prompt: 一位四十岁左右的香港男性，用地道的粤语（广东话）播报新闻，声音沉稳有磁性，咬字清晰，语速适中。"
+}

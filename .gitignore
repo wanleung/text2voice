@@ -9,3 +9,5 @@ data/
 voices/*
 !voices/default/
 !voices/hk-female/
+!voices/hk-male/
+!voices/hk-male-news/

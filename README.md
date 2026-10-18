@@ -216,6 +216,17 @@ compared blind in this routed setup:
 reference clip. English also reads cleanly in `hk-female`: an English paragraph scored 0% word
 errors.
 
+**Deep male voices drift toward Mandarin.** Sentences with English words go to Fun-CosyVoice3,
+and there deep, formal newsreader voices (around 90 Hz) often came out with Mandarin 我们/的
+instead of Cantonese 我哋/嘅. Lighter, conversational male voices stayed Cantonese:
+
+| Male voice (all designed) | English-mixed takes in Cantonese | Character errors | Picked by ear |
+|---|---|---|---|
+| **`hk-male`**: conversational, about 30 | 3 of 3 | 4.8% | 2 of 6 (colloquial) |
+| `hk-male-news`: newsreader, about 40 | 3 of 7 | 7.5% | 3 of 6 |
+| Podcast host, designed from an English description | 2 of 3 | 5.9% | 1 of 6 |
+| Three other deep newsreader or radio voices | 0 of 3 each | 7–8% | not shortlisted |
+
 ## Voices
 
 CosyVoice clones a voice from a 3–30 second reference clip together with its exact transcript.
@@ -226,6 +237,11 @@ Two voices are bundled:
   (Apache-2.0) from a text description, so it isn't a recording of a real person. The design
   prompt is in `voices/hk-female/voice.json`. To make another voice the same way, describe it in
   Chinese and ask explicitly for 粤语/广东话. In testing, every generated clip spoke Cantonese.
+- **`hk-male`**: a Hong Kong Cantonese male, conversational, about 30. Designed the same way.
+  It has a shorter reference clip (5.6 s), which makes it the fastest of the bundled voices.
+- **`hk-male-news`**: a Hong Kong Cantonese male newsreader, about 40. Designed the same way. It
+  sometimes drifts toward Mandarin on sentences with English words, so prefer `hk-male` for
+  English-heavy articles.
 - **`default`**: the CosyVoice sample voice, a Mandarin speaker.
 
 To add your own voice, register a clean native-speaker clip:
@@ -279,5 +295,6 @@ Layout:
 Apache-2.0; see `LICENSE`. This project builds on
 [CosyVoice](https://github.com/FunAudioLLM/CosyVoice) (Apache-2.0), which is included as a git
 submodule. The bundled `voices/default/prompt.wav` is CosyVoice's `asset/zero_shot_prompt.wav`.
-`voices/hk-female/prompt.wav` was generated with Qwen3-TTS VoiceDesign (Apache-2.0).
+The `prompt.wav` files in `voices/hk-female`, `voices/hk-male` and `voices/hk-male-news` were
+generated with Qwen3-TTS VoiceDesign (Apache-2.0).
 Model weights are downloaded separately and are under their own licenses.
