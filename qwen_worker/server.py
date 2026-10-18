@@ -84,6 +84,17 @@ def _language(language: str) -> str:
     return language
 
 
+def _max_tokens(text: str) -> int:
+    """Cap generation by text length (the codec runs at 12 tokens/s of audio).
+
+    Qwen occasionally never emits its end-of-speech token and would otherwise run to 2048 tokens
+    (~170 s of babble), which can take many minutes. The cap allows ~3 CJK characters/s, slower
+    than anyone speaks.
+    """
+    cjk = sum(1 for c in text if "　" <= c <= "鿿")
+    return min(2048, 96 + 4 * cjk + (len(text) - cjk))
+
+
 def _wav(audio: np.ndarray, sr: int) -> Response:
     buf = io.BytesIO()
     sf.write(buf, np.clip(audio, -1, 1), sr, format="WAV", subtype="PCM_16")
@@ -99,7 +110,8 @@ def health():
 def design(req: DesignRequest):
     model = _model("design")
     with lock, torch.inference_mode():
-        wavs, sr = model.generate_voice_design(text=req.text, language=_language(req.language), instruct=req.instruct)
+        wavs, sr = model.generate_voice_design(text=req.text, language=_language(req.language), instruct=req.instruct,
+                                               max_new_tokens=_max_tokens(req.text))
     return _wav(wavs[0], sr)
 
 
@@ -119,5 +131,5 @@ def clone(req: CloneRequest):
                                                      x_vector_only_mode=False)
             prompt_cache[key] = prompt
         wavs, out_sr = model.generate_voice_clone(text=req.text, language=_language(req.language),
-                                                  voice_clone_prompt=prompt)
+                                                  voice_clone_prompt=prompt, max_new_tokens=_max_tokens(req.text))
     return _wav(wavs[0], out_sr)
