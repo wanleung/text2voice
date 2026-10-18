@@ -10,6 +10,9 @@ class Settings(BaseSettings):
 
     # Fun-CosyVoice3 by default; point at pretrained_models/CosyVoice2-0.5B to use CosyVoice 2.
     model_dir: Path = ROOT / "pretrained_models" / "Fun-CosyVoice3-0.5B"
+    # Local Qwen3-TTS worker (qwen_worker/), e.g. http://127.0.0.1:8022: enables voice design and
+    # engine="qwen". Empty disables both.
+    qwen_url: str = ""
     # Optional Cantonese fine-tune for pure-Cantonese sentences (scripts/download_models.py --cantonese).
     yue_model_dir: Path | None = None
     wetext_dir: Path = ROOT / "pretrained_models" / "wetext"

@@ -1,0 +1,37 @@
+[project]
+name = "text2voice-qwen-worker"
+version = "0.1.0"
+description = "Local Qwen3-TTS worker for text2voice: voice design and voice-clone synthesis"
+license = "Apache-2.0"
+requires-python = ">=3.12,<3.13"
+# Separate from the main service: qwen-tts pins transformers 4.57, CosyVoice needs 4.51.
+dependencies = [
+    "torch==2.9.1+rocm7.13.0a20260513",
+    "torchaudio==2.9.0+rocm7.13.0a20260513",
+    "triton==3.5.1+rocm7.13.0a20260513",
+    "rocm[libraries]==7.13.0a20260513",
+    "rocm-sdk-core==7.13.0a20260513",
+    "rocm-sdk-libraries-gfx1151==7.13.0a20260513",
+    "qwen-tts==0.1.1",
+    "fastapi",
+    "uvicorn",
+    "soundfile",
+    "numpy",
+]
+
+[tool.uv]
+package = false
+prerelease = "if-necessary-or-explicit"
+
+[tool.uv.sources]
+torch = { index = "rocm-gfx1151" }
+torchaudio = { index = "rocm-gfx1151" }
+triton = { index = "rocm-gfx1151" }
+rocm = { index = "rocm-gfx1151" }
+rocm-sdk-core = { index = "rocm-gfx1151" }
+rocm-sdk-libraries-gfx1151 = { index = "rocm-gfx1151" }
+
+[[tool.uv.index]]
+name = "rocm-gfx1151"
+url = "https://rocm.nightlies.amd.com/v2/gfx1151/"
+explicit = true

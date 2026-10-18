@@ -153,6 +153,7 @@ async def text_to_speech(
     output_path: str = "",
     wait: bool = True,
     save_to_library: bool = True,
+    engine: Literal["cosyvoice", "qwen"] = "cosyvoice",
 ) -> SpeechResult:
     """Convert text, a local file or a web article to speech and save it as an audio file.
 
@@ -170,6 +171,8 @@ async def text_to_speech(
             job_id to pass to get_tts_job.
         save_to_library: Keep the result in the user's text2voice web library (default). Set false
             for throwaway clips.
+        engine: "cosyvoice" (default, best Cantonese) or "qwen" (Qwen3-TTS; speed must be 1.0, about
+            twice as slow; only available when the server runs the Qwen worker).
 
     Returns the saved file's path, duration and languages, or a job_id if it is still running.
     """
@@ -181,7 +184,7 @@ async def text_to_speech(
         raise ToolError("text is empty")
     if not 0.5 <= speed <= 2.0:
         raise ToolError("speed must be between 0.5 and 2.0")
-    body = {"language": language, "speed": speed, "format": format}
+    body = {"language": language, "speed": speed, "format": format, "engine": engine}
     if voice:
         body["voice"] = voice
 
@@ -256,6 +259,40 @@ async def list_tts_voices() -> VoiceList:
         r = await client.get("/v1/voices")
         _raise_for_status(r)
         return r.json()
+
+
+class DesignedVoice(TypedDict):
+    voice: VoiceInfo
+    preview_path: str  # local copy of the clip the voice was made from, to listen to
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Design TTS voice", readOnlyHint=False, destructiveHint=False))
+async def design_tts_voice(description: str, name: str, language: Literal["yue", "en", "zh"] = "yue",
+                           sample_text: str = "") -> DesignedVoice:
+    """Create a new voice from a text description (Qwen3-TTS VoiceDesign) and save it for text_to_speech.
+
+    No real person's voice is used. Each call produces a different voice, so check the returned preview
+    with the user. Lighter, conversational voices keep Cantonese better than deep newsreader voices on
+    sentences with English words. Needs the server's Qwen worker.
+
+    Args:
+        description: Who is speaking and how, e.g. "Hong Kong woman in her fifties, warm storyteller".
+            Chinese descriptions work well; Cantonese is requested automatically for language "yue".
+        name: Voice name to save as (letters, digits, '_', '-', '.').
+        language: Language the voice will mainly speak: "yue" (Cantonese), "en" or "zh" (Mandarin).
+        sample_text: What the preview says (becomes the voice's transcript); a default is used if empty.
+    """
+    async with _client(timeout=300) as client:
+        r = await client.post("/v1/voices/design", json={"description": description, "language": language,
+                                                         "sample_text": sample_text})
+        _raise_for_status(r)
+        draft = r.json()
+        a = await client.get(draft["audio_url"])
+        _raise_for_status(a)
+        preview = _save(OUTPUT_DIR / f"voice-{name}-preview.wav", a.content)
+        r = await client.post(f"/v1/voices/design/{draft['draft_id']}/save", json={"name": name})
+        _raise_for_status(r)
+        return {"voice": r.json(), "preview_path": preview}
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Add TTS voice", readOnlyHint=False, destructiveHint=False))

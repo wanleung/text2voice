@@ -68,6 +68,8 @@ Library items are kept until you delete them. `T2V_JOB_TTL_HOURS` turns on autom
 | `PATCH` | `/v1/jobs/{id}` | `{"title": …}` renames; `{"shared": true/false}` creates or revokes the share link. |
 | `DELETE` | `/v1/jobs/{id}` | Delete a job, unless it's currently running. |
 | `GET/POST/DELETE` | `/v1/voices` | List, upload or delete reference voices. |
+| `POST` | `/v1/voices/design` | Preview a new voice from a description (needs the [Qwen worker](#qwen)). |
+| `POST` | `/v1/voices/design/{draft_id}/save` | Save a previewed design as a voice. |
 | `GET` | `/health` | Model and device info. |
 
 Common request fields:
@@ -80,6 +82,7 @@ Common request fields:
 - `voice`: a registered voice name. Defaults to `default`.
 - `speed`: 0.5 to 2.0.
 - `format`: `mp3` (the default), `wav`, `flac`, `opus` or `pcm` (16-bit mono, 24 kHz).
+- `engine`: `cosyvoice` (the default) or `qwen`. See [Qwen](#qwen).
 
 ### Short text
 
@@ -135,6 +138,7 @@ service.
 | `get_tts_job` | Checks a job started with `wait=false`. Once it's done, saves the audio and returns its path. |
 | `list_tts_voices` | Lists the available voices. |
 | `add_tts_voice` | Registers a new voice from a local 3–30 s recording plus its transcript. |
+| `design_tts_voice` | Creates and saves a voice from a description, returning a local preview clip to listen to. Needs the Qwen worker. |
 
 Register it with Claude Code:
 
@@ -261,6 +265,39 @@ Then pass `"voice": "cantonese-f"` for Cantonese articles and `"voice": "english
 ones, or set one as `T2V_DEFAULT_VOICE`. Only clone voices you have permission to use, and check
 the license of public speech datasets. Many, including WSYue-TTS-eval, are non-commercial.
 
+## Qwen
+
+An optional local worker (`qwen_worker/`) adds two features based on
+[Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) (Apache-2.0):
+
+- **Voice design:** describe a voice and get a preview. Each preview is a different voice; save the
+  one you like. In the portal it's **Voices → Design voice**, in the API `POST /v1/voices/design`,
+  and in MCP `design_tts_voice`. The saved voice is the exact clip you previewed, and CosyVoice speaks
+  articles with it like any other voice. The bundled `hk-*` voices were made this way.
+- **A second speaking engine:** `"engine": "qwen"` makes Qwen3-TTS read the article by cloning the
+  chosen voice. It only works at speed 1.0 and takes about twice as long as CosyVoice. In a blind
+  test on Cantonese it was "fine, but a little worse" than the CosyVoice setup, so CosyVoice stays
+  the default. With the OpenAI-compatible endpoint, a `model` starting with `qwen` selects it.
+
+Qwen3-TTS has no Cantonese language setting. Cantonese still works in two ways:
+- **Voice design:** the request asks for 粤语 automatically when the language is Cantonese.
+- **Cloning:** when Qwen speaks with a Cantonese voice, the reference clip carries the language.
+
+The worker needs its own environment, because qwen-tts pins `transformers` 4.57 and CosyVoice needs
+4.51. It runs as a separate process on localhost, and the main service forwards requests to it under
+the same GPU lock:
+
+```bash
+uv run python scripts/download_models.py --qwen     # Qwen3-TTS Base + VoiceDesign, ~8.6 GB
+cd qwen_worker && uv sync && cd ..
+cp deploy/text2voice-qwen.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now text2voice-qwen
+echo 'T2V_QWEN_URL=http://127.0.0.1:8022' >> .env && systemctl --user restart text2voice
+```
+
+`/health` reports the worker's state under `qwen`. Without `T2V_QWEN_URL` the service runs as
+before, and the portal disables the Qwen options.
+
 ## Performance
 
 These numbers were measured on a Radeon 8060S with Fun-CosyVoice3 in fp32. The real-time factor
@@ -292,7 +329,9 @@ Layout:
 - `app/jobs.py`: the background queue and library.
 - `app/voices.py`: the voice registry.
 - `app/main.py`: FastAPI routes.
+- `app/qwen.py`: the Qwen worker client and the `qwen` engine.
 - `app/static/`: the portal and share pages.
+- `qwen_worker/`: the Qwen3-TTS worker, a separate uv project.
 
 ## License
 

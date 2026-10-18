@@ -1,5 +1,6 @@
 """API tests with the model replaced by a sine-wave generator (no GPU needed)."""
 import io
+import threading
 import time
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ class FakeEngine:
     sample_rate = 24000
     main = SimpleNamespace(name="fake-model")
     yue = None
+    lock = threading.Lock()
 
     def __init__(self, voices):
         self.voices = voices
@@ -46,6 +48,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
     monkeypatch.setattr(settings, "api_key", "")
     monkeypatch.setattr(settings, "default_voice", "default")  # independent of the local .env
+    monkeypatch.setattr(settings, "qwen_url", "")
     monkeypatch.setattr(main, "TTSEngine", FakeEngine)
     with TestClient(main.app) as c:
         yield c
@@ -241,3 +244,102 @@ def test_voice_upload_rejects_garbage_and_huge_files(client, monkeypatch):
     monkeypatch.setattr(voices, "MAX_UPLOAD_BYTES", 1000)
     r = client.post("/v1/voices", data=form, files={"audio": ("big.wav", wav_bytes(3), "audio/wav")})
     assert r.status_code == 422 and "larger than" in r.json()["detail"]
+
+
+
+class FakeQwenClient:
+    """Stands in for the Qwen worker; records calls."""
+
+    def __init__(self, url):
+        self.calls = []
+
+    def health(self):
+        return {"status": "ok"}
+
+    def _tone(self, seconds=3.0):
+        t = np.arange(int(seconds * 24000)) / 24000
+        return (0.2 * np.sin(2 * np.pi * 180 * t)).astype(np.float32)
+
+    def design(self, text, language, description):
+        self.calls.append(("design", text, language, description))
+        return self._tone()
+
+    def clone(self, text, language, ref_wav, ref_text):
+        self.calls.append(("clone", text, language, ref_text))
+        return self._tone(0.5)
+
+
+@pytest.fixture
+def qwen_client(tmp_path, monkeypatch):
+    voices_dir = tmp_path / "voices"
+    VoiceStore(voices_dir).add("default", wav_bytes(3), "測試。", "yue")
+    monkeypatch.setattr(settings, "voices_dir", voices_dir)
+    monkeypatch.setattr(settings, "jobs_dir", tmp_path / "jobs")
+    monkeypatch.setattr(settings, "api_key", "")
+    monkeypatch.setattr(settings, "default_voice", "default")
+    monkeypatch.setattr(settings, "qwen_url", "http://qwen.test")
+    monkeypatch.setattr(main, "TTSEngine", FakeEngine)
+    monkeypatch.setattr(main, "QwenClient", FakeQwenClient)
+    with TestClient(main.app) as c:
+        yield c
+
+
+def test_qwen_engine_needs_the_worker(client):
+    r = client.post("/v1/tts", json={"text": "Hi.", "engine": "qwen"})
+    assert r.status_code == 422 and "T2V_QWEN_URL" in r.json()["detail"]
+    assert client.post("/v1/voices/design", json={"description": "a voice"}).status_code == 422
+    assert client.get("/health").json()["qwen"] == {"status": "not configured"}
+
+
+def test_qwen_engine_speaks_and_maps_languages(qwen_client):
+    r = qwen_client.post("/v1/tts", json={"text": "今日天氣好好。\n\nHello there.", "engine": "qwen", "format": "wav"})
+    assert r.status_code == 200 and r.headers["x-engine"] == "qwen"
+    calls = main.state["qwen"].calls
+    assert [c[2] for c in calls] == ["yue", "en"]  # per-segment language; the client maps it for Qwen
+    assert calls[0][3] == "測試。"  # the voice's transcript is the clone prompt text
+    assert qwen_client.post("/v1/tts", json={"text": "Hi.", "engine": "qwen", "speed": 1.2}).status_code == 422
+    assert qwen_client.get("/health").json()["qwen"] == {"status": "ok"}
+
+
+def test_qwen_job_and_openai_model(qwen_client):
+    job = qwen_client.post("/v1/jobs", json={"text": "One.\n\nTwo.", "engine": "qwen"}).json()
+    assert job["engine"] == "qwen" and wait_done(qwen_client, job["id"])["status"] == "done"
+    r = qwen_client.post("/v1/audio/speech", json={"model": "qwen3-tts", "input": "Hi.", "speed": 1.5})
+    assert r.status_code == 200 and r.headers["x-engine"] == "qwen"  # speed is ignored for qwen
+
+
+def test_voice_design_preview_then_save(qwen_client):
+    d = qwen_client.post("/v1/voices/design", json={"description": "Hong Kong woman, warm storyteller"}).json()
+    assert d["language"] == "yue" and "嘅" in d["sample_text"] and d["duration_seconds"] == 3.0
+    preview = qwen_client.get(d["audio_url"])
+    assert preview.status_code == 200 and preview.headers["content-type"] == "audio/wav"
+    assert qwen_client.post(f"/v1/voices/design/{d['draft_id']}/save", json={"name": "bad name!"}).status_code == 422
+    v = qwen_client.post(f"/v1/voices/design/{d['draft_id']}/save", json={"name": "storyteller"}).json()
+    assert v["name"] == "storyteller" and v["language"] == "yue" and "Qwen3-TTS" in v["description"]
+    assert v["transcript"] == d["sample_text"]
+    stored, sr = sf.read(settings.voices_dir / "storyteller" / "prompt.wav")
+    assert abs(len(stored) / sr - 3.0) < 0.05  # the saved voice is the previewed clip, not a new sample
+    assert qwen_client.post(f"/v1/voices/design/{d['draft_id']}/save", json={"name": "x"}).status_code == 404
+
+
+def test_design_asks_for_cantonese_when_missing():
+    from app.qwen import QwenClient
+    c = QwenClient("http://unused")
+    sent = []
+    c._post = lambda path, body: (sent.append(body), (np.zeros(10, dtype=np.float32), 24000))[1]
+    c.design("你好。", "yue", "Hong Kong man, calm")
+    c.design("你好。", "yue", "香港男性，讲粤语")
+    c.design("Hi.", "en", "British man")
+    c.clone("你好。", "yue", b"RIFF", "參考。")
+    c.clone("Hi.", "en", b"RIFF", "Ref.")
+    assert "粤语" in sent[0]["instruct"] and sent[0]["language"] == "Chinese"
+    assert sent[1]["instruct"] == "香港男性，讲粤语"  # already asks for Cantonese: unchanged
+    assert sent[2] == {"text": "Hi.", "language": "English", "instruct": "British man"}
+    # Qwen has no Cantonese tag: cloning a Cantonese voice uses Auto so the reference carries the language.
+    assert (sent[3]["language"], sent[4]["language"]) == ("Auto", "English")
+
+
+def test_qwen_chunking_keeps_sentences_whole():
+    from app.qwen import chunk_text
+    chunks = chunk_text("第一句。" * 30 + "Second sentence here. " * 3, limit=40)
+    assert all(len(c) <= 40 for c in chunks[:-1]) and "".join(chunks).replace(" ", "").startswith("第一句。第一句。")

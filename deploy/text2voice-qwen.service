@@ -1,0 +1,17 @@
+# Optional Qwen3-TTS worker (voice design + engine="qwen"). Install next to text2voice.service:
+#   cp deploy/text2voice-qwen.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now text2voice-qwen
+# then set T2V_QWEN_URL=http://127.0.0.1:8022 in .env and restart text2voice.
+[Unit]
+Description=text2voice Qwen3-TTS worker
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/Projects/text2voice/qwen_worker
+# Localhost only: the main service is the only client and handles authentication.
+ExecStart=%h/.local/bin/uv run --no-sync uvicorn server:app --host 127.0.0.1 --port 8022
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

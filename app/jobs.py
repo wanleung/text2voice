@@ -14,7 +14,7 @@ import httpx
 
 from . import audio
 from .config import settings
-from .engine import TTSEngine
+from .engine import SegmentSynthesizer
 from .text import Segment
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ class Job:
     source_url: str | None = None
     languages: list[str] = field(default_factory=list)
     share_token: str | None = None
+    engine: str = "cosyvoice"
 
     def public(self) -> dict:
         d = asdict(self)
@@ -58,8 +59,8 @@ def default_title(segments: list[Segment], limit: int = 60) -> str:
 
 
 class JobManager:
-    def __init__(self, engine: TTSEngine, root: Path):
-        self.engine = engine
+    def __init__(self, engines: dict[str, SegmentSynthesizer], root: Path):
+        self.engines = engines  # "cosyvoice" always; "qwen" when the Qwen worker is configured
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.jobs: dict[str, Job] = {}
@@ -94,11 +95,11 @@ class JobManager:
     # -- API -----------------------------------------------------------------------------
     def submit(self, segments: list[Segment], voice: str, language: str, speed: float, fmt: str,
                callback_url: str | None, metadata: dict, title: str = "", source_url: str | None = None,
-               text: str = "") -> Job:
+               text: str = "", engine: str = "cosyvoice") -> Job:
         job = Job(id=uuid.uuid4().hex, status="queued", voice=voice, language=language, speed=speed,
                   format=fmt, characters=sum(len(s.text) for s in segments),
                   segments_total=len(segments), callback_url=callback_url, metadata=metadata,
-                  title=title.strip() or default_title(segments), source_url=source_url,
+                  title=title.strip() or default_title(segments), source_url=source_url, engine=engine,
                   languages=sorted({s.language for s in segments}))
         self._dir(job.id).mkdir(parents=True)
         (self._dir(job.id) / "text.md").write_text(text, "utf-8")
@@ -170,15 +171,18 @@ class JobManager:
     def _run(self, job: Job) -> None:
         job.status, job.started_at = "running", time.time()
         self._save(job)
-        voice = self.engine.voices.get(job.voice)
+        engine = self.engines.get(job.engine)
+        if engine is None:
+            raise RuntimeError(f"the {job.engine} engine is not available")
+        voice = engine.voices.get(job.voice)
 
         def progress(done: int, total: int) -> None:
             job.segments_done = done
             self._save(job)
 
-        pcm = self.engine.synthesize(self.segments[job.id], voice, job.speed, progress=progress)
-        self.audio_path(job).write_bytes(audio.encode(pcm, self.engine.sample_rate, job.format))
-        job.duration_seconds = round(len(pcm) / self.engine.sample_rate, 2)
+        pcm = engine.synthesize(self.segments[job.id], voice, job.speed, progress=progress)
+        self.audio_path(job).write_bytes(audio.encode(pcm, engine.sample_rate, job.format))
+        job.duration_seconds = round(len(pcm) / engine.sample_rate, 2)
         job.status = "done"
         log.info("job %s done: %.0fs audio in %.0fs", job.id, job.duration_seconds, time.time() - job.started_at)
 

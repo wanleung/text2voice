@@ -42,7 +42,10 @@
     <section id="tab-voices" hidden>
       <div class="section-head">
         <h2>Voices</h2>
-        <button class="primary" onclick="openVoiceDialog()">+ Add voice</button>
+        <div class="row">
+          <button id="design-btn" onclick="openDesignDialog()">Design voice</button>
+          <button class="primary" onclick="openVoiceDialog()">+ Add voice</button>
+        </div>
       </div>
       <p class="muted">Cantonese is always spoken with instruct mode; the voice provides the timbre. English and Mandarin clone the voice fully when it was recorded in that language.</p>
       <div id="voices" class="grid"></div>
@@ -94,7 +97,14 @@
       <label>Format
         <select id="new-format"><option>mp3</option><option>opus</option><option>wav</option><option>flac</option></select>
       </label>
+      <label>Engine
+        <select id="new-engine">
+          <option value="cosyvoice">CosyVoice (recommended)</option>
+          <option value="qwen">Qwen3-TTS</option>
+        </select>
+      </label>
     </div>
+    <p id="engine-note" class="muted small" hidden></p>
     <p id="new-error" class="error" hidden></p>
     <div class="actions">
       <button value="cancel" formnovalidate class="ghost">Cancel</button>
@@ -143,6 +153,38 @@
     <div class="actions">
       <button type="button" class="ghost" onclick="voiceDialog.close()">Cancel</button>
       <button class="primary" type="submit">Add voice</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Design a voice -->
+<dialog id="design-dialog">
+  <form class="dialog" id="design-form">
+    <h2>Design a voice</h2>
+    <p class="muted small">Describe who is speaking and how. Qwen3-TTS creates a new voice from the description, so no real person's voice is cloned. Each preview is a different voice: keep generating until you like one, then save it.</p>
+    <label>Description
+      <textarea id="design-desc" rows="3" required placeholder="e.g. 香港女性，五十歲左右，聲音溫暖，好似講故事咁 · or: Hong Kong woman in her fifties, warm storyteller"></textarea>
+    </label>
+    <div class="opts design-opts">
+      <label>Language
+        <select id="design-lang"><option value="yue">粵語 Cantonese</option><option value="en">English</option><option value="zh">普通話 Mandarin</option></select>
+      </label>
+    </div>
+    <label>Preview text <span class="muted small">becomes the voice's reference transcript</span>
+      <input id="design-text">
+    </label>
+    <p class="muted small">Tip: lighter, conversational voices stay Cantonese on sentences with English words; deep newsreader voices sometimes drift toward Mandarin.</p>
+    <div id="design-preview" hidden>
+      <audio id="design-audio" controls></audio>
+      <div class="row">
+        <input id="design-name" placeholder="Voice name, e.g. hk-storyteller" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}">
+        <button type="button" class="primary" id="design-save">Save voice</button>
+      </div>
+    </div>
+    <p id="design-error" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" class="ghost" onclick="designDialog.close()">Close</button>
+      <button type="submit" class="primary" id="design-generate">Generate preview</button>
     </div>
   </form>
 </dialog>

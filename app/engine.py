@@ -139,7 +139,34 @@ class _Model:
                 for out in self.cv.model.tts(**inp, stream=False, speed=speed)]
 
 
-class TTSEngine:
+class SegmentSynthesizer:
+    """Shared article logic: synthesize segments in order with pauses between paragraphs."""
+    sample_rate: int
+
+    def synthesize_segment(self, segment: Segment, voice: Voice, speed: float = 1.0) -> np.ndarray:
+        raise NotImplementedError
+
+    def synthesize(self, segments: list[Segment], voice: Voice, speed: float = 1.0,
+                   pause_ms: int | None = None,
+                   progress: Callable[[int, int], None] | None = None) -> np.ndarray:
+        audio = list(self.iter_synthesize(segments, voice, speed, pause_ms, progress))
+        return np.concatenate(audio) if audio else np.zeros(0, dtype=np.float32)
+
+    def iter_synthesize(self, segments: list[Segment], voice: Voice, speed: float = 1.0,
+                        pause_ms: int | None = None,
+                        progress: Callable[[int, int], None] | None = None) -> Iterator[np.ndarray]:
+        pause_ms = settings.paragraph_pause_ms if pause_ms is None else pause_ms
+        pause = np.zeros(int(self.sample_rate * pause_ms / 1000), dtype=np.float32)
+        gap = np.zeros(int(self.sample_rate * 0.15), dtype=np.float32)  # language switch mid-paragraph
+        for i, seg in enumerate(segments):
+            if i:
+                yield pause if segments[i - 1].paragraph_end else gap
+            yield self.synthesize_segment(seg, voice, speed)
+            if progress:
+                progress(i + 1, len(segments))
+
+
+class TTSEngine(SegmentSynthesizer):
     def __init__(self, voices: VoiceStore):
         _patch_cosyvoice()
         self.voices = voices
@@ -168,22 +195,3 @@ class TTSEngine:
             for chunk in self.chunks(segment):
                 pieces += self.model_for(chunk, segment.language).tts(chunk, segment.language, voice, speed)
         return np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.float32)
-
-    def synthesize(self, segments: list[Segment], voice: Voice, speed: float = 1.0,
-                   pause_ms: int | None = None,
-                   progress: Callable[[int, int], None] | None = None) -> np.ndarray:
-        audio = list(self.iter_synthesize(segments, voice, speed, pause_ms, progress))
-        return np.concatenate(audio) if audio else np.zeros(0, dtype=np.float32)
-
-    def iter_synthesize(self, segments: list[Segment], voice: Voice, speed: float = 1.0,
-                        pause_ms: int | None = None,
-                        progress: Callable[[int, int], None] | None = None) -> Iterator[np.ndarray]:
-        pause_ms = settings.paragraph_pause_ms if pause_ms is None else pause_ms
-        pause = np.zeros(int(self.sample_rate * pause_ms / 1000), dtype=np.float32)
-        gap = np.zeros(int(self.sample_rate * 0.15), dtype=np.float32)  # language switch mid-paragraph
-        for i, seg in enumerate(segments):
-            if i:
-                yield pause if segments[i - 1].paragraph_end else gap
-            yield self.synthesize_segment(seg, voice, speed)
-            if progress:
-                progress(i + 1, len(segments))

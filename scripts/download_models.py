@@ -3,6 +3,7 @@
     uv run python scripts/download_models.py            # Fun-CosyVoice3 + text normaliser
     uv run python scripts/download_models.py --cantonese  # + CosyVoice2-Yue-ZoengJyutGaai
     uv run python scripts/download_models.py --cosyvoice2
+    uv run python scripts/download_models.py --qwen       # Qwen3-TTS Base + VoiceDesign (qwen_worker/)
 """
 import argparse
 import time
@@ -45,6 +46,16 @@ def fetch_cantonese() -> None:
     print(f"ok: {YUE_DIR} (set T2V_YUE_MODEL_DIR=pretrained_models/{YUE_DIR})")
 
 
+QWEN_REPOS = ["Qwen/Qwen3-TTS-12Hz-1.7B-Base", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"]
+
+
+def fetch_qwen() -> None:
+    for repo in QWEN_REPOS:
+        name = repo.split("/")[1]
+        hf_snapshot_download(repo, local_dir=str(ROOT / name))
+        print(f"ok: {name}")
+
+
 def fetch(repo: str, name: str, required: list[str], attempts: int = 6) -> None:
     for i in range(attempts):
         try:
@@ -66,6 +77,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--cosyvoice2", action="store_true", help="also download CosyVoice2-0.5B")
     ap.add_argument("--cantonese", action="store_true", help="also download the CosyVoice2-Yue-ZoengJyutGaai Cantonese model")
+    ap.add_argument("--qwen", action="store_true", help="also download the Qwen3-TTS models used by qwen_worker/")
     args = ap.parse_args()
     fetch(*MODELS["wetext"])
     fetch(*MODELS["cosyvoice3"])
@@ -73,3 +85,5 @@ if __name__ == "__main__":
         fetch(*MODELS["cosyvoice2"])
     if args.cantonese:
         fetch_cantonese()
+    if args.qwen:
+        fetch_qwen()

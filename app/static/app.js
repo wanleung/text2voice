@@ -1,10 +1,13 @@
 "use strict";
 const $ = (sel) => document.querySelector(sel);
 const newDialog = $("#new-dialog"), itemDialog = $("#item-dialog"), voiceDialog = $("#voice-dialog");
+const designDialog = $("#design-dialog");
 const player = $("#player");
 const LANG_NAMES = { en: "English", yue: "粵語", zh: "普通話" };
 let jobs = [], voices = [], defaultVoice = "default", currentItem = null, playingId = null;
 let source = "url", pollTimer = null;
+let qwenStatus = "not configured";  // from /health: "ok" when the Qwen worker is running
+const QWEN_OFF = "Qwen needs the Qwen worker running on the server (see README, \"Qwen\").";
 
 // ---- helpers -------------------------------------------------------------------------------
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -115,6 +118,7 @@ function renderLibrary() {
       ...(j.languages || []).map((l) => `<span class="chip">${esc(LANG_NAMES[l] || l)}</span>`),
       done ? "" : `<span class="chip status-${esc(j.status)}">${esc(j.status === "running" ? `${Math.round(j.progress * 100)}%` : j.status)}</span>`,
       j.share_url ? `<span class="chip shared">shared</span>` : "",
+      j.engine === "qwen" ? `<span class="chip engine">Qwen</span>` : "",
     ].join("");
     return `<div class="item ${playingId === j.id ? "playing" : ""}" data-id="${esc(j.id)}">
       <button class="thumb" data-play="${esc(j.id)}" ${done ? "" : "disabled"} title="Play">${done ? (playingId === j.id && !player.paused ? "❚❚" : "▶") : active ? "⋯" : "!"}</button>
@@ -169,7 +173,8 @@ async function openItem(id) {
   currentItem = j;
   $("#item-title").value = j.title;
   const meta = [fmtDate(j.created_at), fmtDuration(j.duration_seconds), `${j.characters} characters`,
-                `voice: ${j.voice}`, `speed ${j.speed}×`, j.format.toUpperCase()].filter(Boolean);
+                `voice: ${j.voice}`, `speed ${j.speed}×`, j.format.toUpperCase(),
+                j.engine === "qwen" ? "engine: Qwen3-TTS" : "engine: CosyVoice"].filter(Boolean);
   $("#item-meta").innerHTML = meta.map(esc).join(" · ") +
     (j.source_url ? ` · <a href="${esc(j.source_url)}" target="_blank" rel="noopener noreferrer">source</a>` : "");
   const done = j.status === "done";
@@ -238,8 +243,23 @@ function openNew() {
   $("#new-voice").innerHTML = voices.map((v) =>
     `<option value="${esc(v.name)}" ${v.name === defaultVoice ? "selected" : ""}>${esc(v.name)} (${esc(LANG_NAMES[v.language] || v.language)})</option>`).join("");
   setSource(source);
+  const qwenOk = qwenStatus === "ok";
+  $("#new-engine").querySelector('option[value="qwen"]').disabled = !qwenOk;
+  if (!qwenOk) $("#new-engine").value = "cosyvoice";
+  updateEngineNote();
   newDialog.showModal();
 }
+
+function updateEngineNote() {
+  const qwen = $("#new-engine").value === "qwen";
+  $("#new-speed").disabled = qwen;
+  if (qwen) { $("#new-speed").value = 1; $("#speed-val").textContent = "1.0×"; }
+  const note = qwenStatus !== "ok" ? QWEN_OFF
+    : qwen ? "Qwen3-TTS speaks at normal speed only and takes about twice as long as CosyVoice." : "";
+  $("#engine-note").textContent = note;
+  $("#engine-note").hidden = !note;
+}
+$("#new-engine").addEventListener("change", updateEngineNote);
 $("#new-btn").addEventListener("click", openNew);
 
 function setSource(s) {
@@ -278,6 +298,7 @@ $("#convert-btn").addEventListener("click", async () => {
     language: $("#new-lang").value,
     speed: +$("#new-speed").value,
     format: $("#new-format").value,
+    engine: $("#new-engine").value,
   };
   const text = $("#new-text").value.trim(), url = $("#new-url").value.trim();
   if (text) {
@@ -333,6 +354,65 @@ $("#voices").addEventListener("click", async (e) => {
 
 function openVoiceDialog() { $("#voice-error").hidden = true; voiceDialog.showModal(); }
 
+// ---- voice design --------------------------------------------------------------------------
+const DESIGN_TEXT = {
+  yue: "大家好，歡迎收聽今日嘅新聞，我哋而家為你整理最新嘅消息。",
+  en: "Hello and welcome to today's news. Here are the stories you need to know.",
+  zh: "大家好，欢迎收听今天的新闻，我们现在为你整理最新的消息。",
+};
+let draftId = null;
+
+function designError(msg) { $("#design-error").textContent = msg; $("#design-error").hidden = !msg; }
+
+function openDesignDialog() {
+  designError(qwenStatus === "ok" ? "" : QWEN_OFF);
+  $("#design-generate").disabled = qwenStatus !== "ok";
+  if (!$("#design-text").value) $("#design-text").value = DESIGN_TEXT[$("#design-lang").value];
+  designDialog.showModal();
+}
+
+$("#design-lang").addEventListener("change", () => {
+  const t = $("#design-text");
+  if (!t.value || Object.values(DESIGN_TEXT).includes(t.value)) t.value = DESIGN_TEXT[$("#design-lang").value];
+});
+
+$("#design-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  designError("");
+  const btn = $("#design-generate");
+  btn.disabled = true;
+  btn.textContent = "Generating…";
+  try {
+    const d = await api("/v1/voices/design", { method: "POST", json: {
+      description: $("#design-desc").value.trim(), language: $("#design-lang").value, sample_text: $("#design-text").value.trim() } });
+    draftId = d.draft_id;
+    $("#design-audio").src = d.audio_url;
+    $("#design-preview").hidden = false;
+    $("#design-audio").play().catch(() => {});
+    btn.textContent = "Try another";
+  } catch (err) {
+    designError(err.message);
+    btn.textContent = draftId ? "Try another" : "Generate preview";
+  } finally { btn.disabled = false; }
+});
+
+$("#design-save").addEventListener("click", async () => {
+  const name = $("#design-name").value.trim();
+  if (!draftId) return designError("Generate a preview first.");
+  if (!name) return designError("Give the voice a name.");
+  try {
+    await api(`/v1/voices/design/${draftId}/save`, { method: "POST", json: { name } });
+    designDialog.close();
+    $("#design-form").reset();
+    $("#design-preview").hidden = true;
+    $("#design-generate").textContent = "Generate preview";
+    draftId = null;
+    await loadVoices();
+    renderVoices();
+    toast(`Voice "${name}" saved`);
+  } catch (err) { designError(err.message); }
+});
+
 $("#voice-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#voice-error").hidden = true;
@@ -356,6 +436,7 @@ async function start() {
   $("#login").hidden = true;
   $("#app").hidden = false;
   $("#logout-btn").hidden = !s.auth_required;
-  await Promise.all([loadVoices(), loadJobs()]);
+  await Promise.all([loadVoices(), loadJobs(),
+    fetch("/health").then((r) => r.json()).then((h) => { qwenStatus = h.qwen?.status || "not configured"; }).catch(() => {})]);
 }
 start();

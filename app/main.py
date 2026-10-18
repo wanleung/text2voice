@@ -1,6 +1,9 @@
 import logging
 import re
 import secrets
+import threading
+import time
+import uuid
 from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
@@ -18,8 +21,9 @@ from .config import settings
 from .engine import TTSEngine
 from .fetch import FetchError, fetch_article
 from .jobs import JobManager
+from .qwen import QwenClient, QwenEngine, QwenUnavailable
 from .text import LANGUAGES, Segment, prepare
-from .voices import VoiceError, VoiceStore
+from .voices import NAME_RE, VoiceError, VoiceStore
 
 STATIC = Path(__file__).parent / "static"
 
@@ -27,6 +31,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 Language = Literal["auto", "en", "yue", "zh"]
 Format = Literal["mp3", "wav", "flac", "opus", "pcm"]
+Engine = Literal["cosyvoice", "qwen"]
 
 state: dict = {}
 
@@ -35,7 +40,12 @@ state: dict = {}
 async def lifespan(app: FastAPI):
     voices = VoiceStore(settings.voices_dir)
     engine = await run_in_threadpool(TTSEngine, voices)
-    state.update(voices=voices, engine=engine, jobs=JobManager(engine, settings.jobs_dir))
+    engines = {"cosyvoice": engine}
+    qwen = QwenClient(settings.qwen_url) if settings.qwen_url else None
+    if qwen:
+        engines["qwen"] = QwenEngine(qwen, voices, engine.lock)
+    state.update(voices=voices, engine=engine, engines=engines, qwen=qwen, drafts={}, drafts_lock=threading.Lock(),
+                 jobs=JobManager(engines, settings.jobs_dir))
     yield
 
 
@@ -75,6 +85,7 @@ class TTSRequest(BaseModel):
     voice: str = Field(default_factory=lambda: settings.default_voice)
     speed: float = Field(1.0, ge=0.5, le=2.0)
     format: Format = "mp3"
+    engine: Engine = Field("cosyvoice", description="'qwen' speaks with Qwen3-TTS via the local worker (speed must be 1.0).")
 
 
 class JobRequest(TTSRequest):
@@ -104,7 +115,7 @@ class JobUpdate(BaseModel):
 
 
 class OpenAISpeechRequest(BaseModel):
-    model: str = "cosyvoice"
+    model: str = Field("cosyvoice", description="'qwen' (or any name starting with it) selects the Qwen engine.")
     input: str = Field(..., min_length=1)
     voice: str = Field(default_factory=lambda: settings.default_voice)
     response_format: Format = "mp3"
@@ -129,14 +140,27 @@ def _voice(name: str):
         raise HTTPException(404, str(e)) from e
 
 
-def _synthesize(text: str, language: str, voice_name: str, speed: float, fmt: str) -> Response:
+def _engine(name: str, speed: float):
+    engine = state["engines"].get(name)
+    if engine is None:
+        raise HTTPException(422, f"the {name} engine is not configured (set T2V_QWEN_URL and run qwen_worker/)")
+    if name == "qwen" and speed != 1.0:
+        raise HTTPException(422, "the qwen engine does not support speed changes; use speed 1.0")
+    return engine
+
+
+def _synthesize(text: str, language: str, voice_name: str, speed: float, fmt: str, engine_name: str) -> Response:
+    engine = _engine(engine_name, speed)
     segments = _segments(text, language, settings.max_sync_chars)
     voice = _voice(voice_name)
-    engine: TTSEngine = state["engine"]
-    pcm = engine.synthesize(segments, voice, speed)
+    try:
+        pcm = engine.synthesize(segments, voice, speed)
+    except QwenUnavailable as e:
+        raise HTTPException(503, str(e)) from e
     return Response(audio.encode(pcm, engine.sample_rate, fmt), media_type=audio.media_type(fmt, engine.sample_rate),
                     headers={"X-Audio-Duration": f"{len(pcm) / engine.sample_rate:.2f}",
-                             "X-Languages": ",".join(sorted({s.language for s in segments}))})
+                             "X-Languages": ",".join(sorted({s.language for s in segments})),
+                             "X-Engine": engine_name})
 
 
 @app.get("/health")
@@ -152,6 +176,7 @@ def health():
         "sample_rate": engine.sample_rate,
         "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
         "queued_jobs": state["jobs"].queue.qsize(),
+        "qwen": state["qwen"].health() if state.get("qwen") else {"status": "not configured"},
     }
 
 
@@ -159,14 +184,16 @@ def health():
           responses={200: {"content": {"audio/mpeg": {}, "audio/wav": {}}}})
 def tts(req: TTSRequest):
     """Synthesize short text synchronously and return the audio file."""
-    return _synthesize(req.text, req.language, req.voice, req.speed, req.format)
+    return _synthesize(req.text, req.language, req.voice, req.speed, req.format, req.engine)
 
 
 @app.post("/v1/audio/speech", dependencies=auth, response_class=Response)
 def openai_speech(req: OpenAISpeechRequest):
     """OpenAI-compatible endpoint. Unknown voice names (e.g. 'alloy') fall back to the default voice."""
     voice = req.voice if (settings.voices_dir / req.voice / "voice.json").exists() else settings.default_voice
-    return _synthesize(req.input, req.language, voice, min(max(req.speed, 0.5), 2.0), req.response_format)
+    engine = "qwen" if req.model.lower().startswith("qwen") else "cosyvoice"
+    speed = 1.0 if engine == "qwen" else min(max(req.speed, 0.5), 2.0)
+    return _synthesize(req.input, req.language, voice, speed, req.response_format, engine)
 
 
 # -- jobs --------------------------------------------------------------------------------
@@ -187,6 +214,7 @@ async def fetch_url(req: FetchRequest):
 @app.post("/v1/jobs", dependencies=auth, status_code=202)
 async def create_job(req: JobRequest):
     """Queue an article (text or URL) for synthesis. Poll GET /v1/jobs/{id} or pass callback_url."""
+    _engine(req.engine, req.speed)
     text, title, source_url = req.text, req.title, req.source_url
     if req.url:
         article = await _fetch(req.url)
@@ -194,7 +222,8 @@ async def create_job(req: JobRequest):
     segments = _segments(text, req.language, settings.max_job_chars)
     _voice(req.voice)
     job = state["jobs"].submit(segments, req.voice, req.language, req.speed, req.format,
-                               req.callback_url, req.metadata, title=title, source_url=source_url, text=text)
+                               req.callback_url, req.metadata, title=title, source_url=source_url, text=text,
+                               engine=req.engine)
     return job.public()
 
 
@@ -348,3 +377,87 @@ def delete_voice(name: str):
         state["voices"].delete(name)
     except VoiceError as e:
         raise HTTPException(404, str(e)) from e
+
+
+# -- voice design (Qwen3-TTS VoiceDesign via the worker) ----------------------------------
+DESIGN_SAMPLES = {
+    "yue": "大家好，歡迎收聽今日嘅新聞，我哋而家為你整理最新嘅消息。",
+    "en": "Hello and welcome to today's news. Here are the stories you need to know.",
+    "zh": "大家好，欢迎收听今天的新闻，我们现在为你整理最新的消息。",
+}
+DRAFT_TTL, MAX_DRAFTS = 3600, 20
+
+
+class DesignRequest(BaseModel):
+    description: str = Field(..., min_length=3, max_length=500,
+                             description="Who is speaking and how, e.g. 'Hong Kong woman in her 50s, warm storyteller'.")
+    language: Literal["yue", "en", "zh"] = "yue"
+    sample_text: str = Field("", max_length=200, description="What the preview says; becomes the voice's transcript.")
+
+
+class SaveDesignRequest(BaseModel):
+    name: str
+    overwrite: bool = False
+
+
+def _qwen() -> QwenClient:
+    if not state.get("qwen"):
+        raise HTTPException(422, "voice design needs the Qwen worker (set T2V_QWEN_URL and run qwen_worker/)")
+    return state["qwen"]
+
+
+def _draft(draft_id: str) -> dict:
+    with state["drafts_lock"]:
+        now = time.time()
+        for k in [k for k, d in state["drafts"].items() if now - d["created"] > DRAFT_TTL]:
+            del state["drafts"][k]
+        draft = state["drafts"].get(draft_id)
+    if draft is None:
+        raise HTTPException(404, "design draft not found or expired; generate a new preview")
+    return draft
+
+
+@app.post("/v1/voices/design", dependencies=auth, status_code=201)
+def design_voice(req: DesignRequest):
+    """Generate a preview of a new voice from a description. Save it with POST .../{draft_id}/save.
+
+    Each call samples a new voice; save the draft you liked rather than regenerating it.
+    """
+    client = _qwen()
+    text = req.sample_text.strip() or DESIGN_SAMPLES[req.language]
+    try:
+        with state["engine"].lock:  # same GPU as the CosyVoice engine
+            pcm = client.design(text, req.language, req.description)
+    except QwenUnavailable as e:
+        raise HTTPException(503, str(e)) from e
+    draft_id = uuid.uuid4().hex
+    with state["drafts_lock"]:
+        while len(state["drafts"]) >= MAX_DRAFTS:
+            del state["drafts"][min(state["drafts"], key=lambda k: state["drafts"][k]["created"])]
+        state["drafts"][draft_id] = {"wav": audio.encode(pcm, 24000, "wav"), "text": text, "language": req.language,
+                                     "description": req.description, "created": time.time()}
+    return {"draft_id": draft_id, "audio_url": f"/v1/voices/design/{draft_id}/audio", "sample_text": text,
+            "language": req.language, "description": req.description, "duration_seconds": round(len(pcm) / 24000, 2)}
+
+
+@app.get("/v1/voices/design/{draft_id}/audio", dependencies=auth, response_class=Response)
+def design_voice_audio(draft_id: str):
+    return Response(_draft(draft_id)["wav"], media_type="audio/wav")
+
+
+@app.post("/v1/voices/design/{draft_id}/save", dependencies=auth, status_code=201)
+def save_designed_voice(draft_id: str, req: SaveDesignRequest):
+    """Register a previewed design as a voice, exactly as it sounded in the preview."""
+    draft = _draft(draft_id)
+    if not NAME_RE.match(req.name):
+        raise HTTPException(422, "voice name must be 1-64 chars of letters, digits, '_', '-', '.'")
+    description = ("Synthetic: designed with Qwen3-TTS-12Hz-1.7B-VoiceDesign (Apache-2.0), not a recording "
+                   "of a real person. Design prompt: " + draft["description"])
+    try:
+        voice = state["voices"].add(req.name, draft["wav"], draft["text"], draft["language"], description,
+                                    overwrite=req.overwrite)
+    except VoiceError as e:
+        raise HTTPException(422, str(e)) from e
+    with state["drafts_lock"]:
+        state["drafts"].pop(draft_id, None)
+    return voice.public()
