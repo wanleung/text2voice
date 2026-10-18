@@ -54,3 +54,32 @@ def test_cantonese_model_routing():
     assert not use_yue_model("我哋會用Microsoft 365。", "yue")  # English words stay on the main model
     assert not use_yue_model("Hello there.", "en")
     assert not use_yue_model("今日天氣好熱。", "zh")
+
+
+def test_divider_lines_and_stray_brackets_are_not_spoken():
+    text = "標題\n==========\n第一段。\n～～～～\nIntro text.\n-----\n佢問：【點算好？\n】\n跟住講。"
+    segments = prepare(text)
+    assert [s.text for s in segments] == ["標題。", "第一段。", "Intro text.", "佢問：【點算好？】跟住講。"]
+    assert all("=" not in s.text and "～" not in s.text for s in segments)
+
+
+def test_progress_moves_within_a_long_segment():
+    import numpy as np
+    from app.engine import SegmentSynthesizer, report_chunks
+    from app.text import Segment
+
+    class Chunky(SegmentSynthesizer):
+        sample_rate = 100
+
+        def synthesize_segment(self, segment, voice, speed=1.0, on_chunk=None):
+            for _ in report_chunks(segment.text.split("|"), on_chunk):
+                pass
+            return np.zeros(10, dtype=np.float32)
+
+    calls = []
+    Chunky().synthesize([Segment("aa|aa", "en"), Segment("b|b|b|b", "en")], None, pause_ms=0,
+                        progress=lambda *a: calls.append(a))
+    fractions = [f for _, _, f in calls]
+    assert fractions == sorted(fractions) and fractions[-1] == 1
+    assert len(calls) > 2 + 2  # updates inside segments, not only at their ends
+    assert calls[-1][:2] == (2, 2)

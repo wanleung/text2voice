@@ -13,7 +13,7 @@ import soundfile as sf
 import torch
 import torchaudio
 
-from .engine import SegmentSynthesizer
+from .engine import ChunkCallback, SegmentSynthesizer, report_chunks
 from .text import Segment, split_sentences
 from .voices import Voice, VoiceStore
 
@@ -90,12 +90,13 @@ class QwenEngine(SegmentSynthesizer):
         self.voices = voices
         self.lock = lock  # shared with the CosyVoice engine: both run on the same GPU
 
-    def synthesize_segment(self, segment: Segment, voice: Voice, speed: float = 1.0) -> np.ndarray:
+    def synthesize_segment(self, segment: Segment, voice: Voice, speed: float = 1.0,
+                           on_chunk: ChunkCallback | None = None) -> np.ndarray:
         if speed != 1.0:
             raise ValueError("the Qwen engine does not support speed changes")
         ref = self.voices.wav_path(voice.name).read_bytes()
         pieces = []
         with self.lock:
-            for chunk in chunk_text(segment.text):
+            for chunk in report_chunks(chunk_text(segment.text), on_chunk):
                 pieces.append(self.client.clone(chunk, segment.language, ref, voice.transcript))
         return np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.float32)

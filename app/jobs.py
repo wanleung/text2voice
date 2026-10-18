@@ -31,6 +31,7 @@ class Job:
     characters: int
     segments_total: int
     segments_done: int = 0
+    progress: float = 0.0  # share of the text spoken, updated after every sentence or so
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
@@ -47,7 +48,7 @@ class Job:
     def public(self) -> dict:
         d = asdict(self)
         d.pop("callback_url")
-        d["progress"] = round(self.segments_done / self.segments_total, 3) if self.segments_total else 0
+        d["progress"] = 1.0 if self.status == "done" else round(self.progress, 3)
         d["audio_url"] = f"/v1/jobs/{self.id}/audio" if self.status == "done" else None
         d["share_url"] = f"/s/{self.share_token}" if self.share_token else None
         return d
@@ -176,8 +177,8 @@ class JobManager:
             raise RuntimeError(f"the {job.engine} engine is not available")
         voice = engine.voices.get(job.voice)
 
-        def progress(done: int, total: int) -> None:
-            job.segments_done = done
+        def progress(done: int, total: int, fraction: float) -> None:
+            job.segments_done, job.progress = done, fraction
             self._save(job)
 
         pcm = engine.synthesize(self.segments[job.id], voice, job.speed, progress=progress)

@@ -219,8 +219,8 @@ async def text_to_speech(
                 return {"status": job["status"], "job_id": job["id"], "title": job["title"],
                         "progress": job["progress"],
                         "note": f"still running after {WAIT_TIMEOUT:.0f}s; call get_tts_job later"}
-            await ctx.report_progress(job["segments_done"], job["segments_total"],
-                                      f"{job['status']}: {job['segments_done']}/{job['segments_total']} segments")
+            await ctx.report_progress(round(job["progress"] * 100), 100,
+                                      f"{job['status']}: {job['progress']:.0%}")
             await asyncio.sleep(1 if polls < 10 else 3)  # short clips finish in seconds
             polls += 1
             r = await client.get(f"/v1/jobs/{job['id']}")

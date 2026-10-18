@@ -139,31 +139,55 @@ class _Model:
                 for out in self.cv.model.tts(**inp, stream=False, speed=speed)]
 
 
+# progress(segments_done, segments_total, fraction): fraction is the share of the text spoken so far,
+# updated after every model call, so a long segment doesn't freeze the progress bar.
+Progress = Callable[[int, int, float], None]
+# on_chunk(fraction): the share of the current segment spoken so far.
+ChunkCallback = Callable[[float], None]
+
+
+def report_chunks(chunks: list[str], on_chunk: ChunkCallback | None) -> Iterator[str]:
+    """Yield chunks, calling on_chunk with the share of the text done after each one."""
+    total = sum(len(c) for c in chunks) or 1
+    done = 0
+    for chunk in chunks:
+        yield chunk
+        done += len(chunk)
+        if on_chunk:
+            on_chunk(done / total)
+
+
 class SegmentSynthesizer:
     """Shared article logic: synthesize segments in order with pauses between paragraphs."""
     sample_rate: int
 
-    def synthesize_segment(self, segment: Segment, voice: Voice, speed: float = 1.0) -> np.ndarray:
+    def synthesize_segment(self, segment: Segment, voice: Voice, speed: float = 1.0,
+                           on_chunk: ChunkCallback | None = None) -> np.ndarray:
         raise NotImplementedError
 
     def synthesize(self, segments: list[Segment], voice: Voice, speed: float = 1.0,
-                   pause_ms: int | None = None,
-                   progress: Callable[[int, int], None] | None = None) -> np.ndarray:
+                   pause_ms: int | None = None, progress: Progress | None = None) -> np.ndarray:
         audio = list(self.iter_synthesize(segments, voice, speed, pause_ms, progress))
         return np.concatenate(audio) if audio else np.zeros(0, dtype=np.float32)
 
     def iter_synthesize(self, segments: list[Segment], voice: Voice, speed: float = 1.0,
-                        pause_ms: int | None = None,
-                        progress: Callable[[int, int], None] | None = None) -> Iterator[np.ndarray]:
+                        pause_ms: int | None = None, progress: Progress | None = None) -> Iterator[np.ndarray]:
         pause_ms = settings.paragraph_pause_ms if pause_ms is None else pause_ms
         pause = np.zeros(int(self.sample_rate * pause_ms / 1000), dtype=np.float32)
         gap = np.zeros(int(self.sample_rate * 0.15), dtype=np.float32)  # language switch mid-paragraph
+        total = sum(len(s.text) for s in segments) or 1
+        before = 0  # characters in the segments already spoken
         for i, seg in enumerate(segments):
             if i:
                 yield pause if segments[i - 1].paragraph_end else gap
-            yield self.synthesize_segment(seg, voice, speed)
+            on_chunk = None
             if progress:
-                progress(i + 1, len(segments))
+                def on_chunk(f, i=i, before=before, n=len(seg.text)):
+                    progress(i, len(segments), (before + f * n) / total)
+            yield self.synthesize_segment(seg, voice, speed, on_chunk)
+            before += len(seg.text)
+            if progress:
+                progress(i + 1, len(segments), before / total)
 
 
 class TTSEngine(SegmentSynthesizer):
@@ -189,9 +213,10 @@ class TTSEngine(SegmentSynthesizer):
     def model_for(self, chunk: str, language: str) -> _Model:
         return self.yue if self.yue and use_yue_model(chunk, language) else self.main
 
-    def synthesize_segment(self, segment: Segment, voice: Voice, speed: float = 1.0) -> np.ndarray:
+    def synthesize_segment(self, segment: Segment, voice: Voice, speed: float = 1.0,
+                           on_chunk: ChunkCallback | None = None) -> np.ndarray:
         pieces = []
         with self.lock, torch.inference_mode():
-            for chunk in self.chunks(segment):
+            for chunk in report_chunks(self.chunks(segment), on_chunk):
                 pieces += self.model_for(chunk, segment.language).tts(chunk, segment.language, voice, speed)
         return np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.float32)

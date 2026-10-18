@@ -29,7 +29,7 @@ class FakeEngine:
         self.calls.append((segments, voice.name, speed))
         for i in range(len(segments)):
             if progress:
-                progress(i + 1, len(segments))
+                progress(i + 1, len(segments), (i + 1) / len(segments))
         t = np.arange(int(0.5 * self.sample_rate * len(segments))) / self.sample_rate
         return (0.1 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
 
