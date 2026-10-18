@@ -51,6 +51,11 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
+@pytest.fixture
+def settings_voices(client):
+    return settings.voices_dir  # the temporary folder the client fixture patched in
+
+
 def test_health(client):
     assert client.get("/health").json()["status"] == "ok"
 
@@ -192,3 +197,47 @@ def test_portal_login_cookie(client, monkeypatch):
 def test_voice_preview_audio(client):
     r = client.get("/v1/voices/default/audio")
     assert r.status_code == 200 and r.headers["content-type"] == "audio/wav"
+
+
+def encoded_bytes(container: str, codec: str, seconds: float = 4.0, sr: int = 48000) -> bytes:
+    """A tone encoded with PyAV, like a phone (AAC/ALAC in M4A) or browser (Opus in WebM) recording."""
+    import av
+    buf = io.BytesIO()
+    with av.open(buf, "w", format=container) as out:
+        stream = out.add_stream(codec, rate=sr, layout="mono")
+        t = np.arange(int(seconds * sr)) / sr
+        pcm = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+        fmt = "fltp" if codec in ("aac", "libopus") else "s16p"
+        samples = pcm if fmt == "fltp" else (pcm * 32767).astype(np.int16)
+        for i in range(0, len(samples), 1024):
+            frame = av.AudioFrame.from_ndarray(samples[None, i:i + 1024], format=fmt, layout="mono")
+            frame.sample_rate = sr
+            for packet in stream.encode(frame):
+                out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("filename, container, codec", [
+    ("memo.m4a", "mp4", "aac"),        # iPhone Voice Memos / Android recorders
+    ("memo-lossless.m4a", "mp4", "alac"),
+    ("browser.webm", "webm", "libopus"),  # MediaRecorder in browsers
+])
+def test_voice_upload_compressed_formats(client, settings_voices, filename, container, codec):
+    data = encoded_bytes(container, codec)
+    r = client.post("/v1/voices", data={"name": f"v-{codec}", "language": "yue", "transcript": "測試。"},
+                    files={"audio": (filename, data, "audio/mp4")})
+    assert r.status_code == 201, r.text
+    stored, sr = sf.read(settings_voices / f"v-{codec}" / "prompt.wav")
+    assert sr == 24000 and abs(len(stored) / sr - 4.0) < 0.1  # decoded fully, resampled to 24 kHz
+
+
+def test_voice_upload_rejects_garbage_and_huge_files(client, monkeypatch):
+    form = {"name": "bad", "language": "yue", "transcript": "測試。"}
+    r = client.post("/v1/voices", data=form, files={"audio": ("x.m4a", b"not audio at all" * 100, "audio/mp4")})
+    assert r.status_code == 422 and "M4A" in r.json()["detail"]
+    from app import voices
+    monkeypatch.setattr(voices, "MAX_UPLOAD_BYTES", 1000)
+    r = client.post("/v1/voices", data=form, files={"audio": ("big.wav", wav_bytes(3), "audio/wav")})
+    assert r.status_code == 422 and "larger than" in r.json()["detail"]

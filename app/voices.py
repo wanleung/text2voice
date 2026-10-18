@@ -11,6 +11,7 @@ import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import av
 import numpy as np
 import soundfile as sf
 import torch
@@ -21,10 +22,41 @@ from .text import LANGUAGES
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 PROMPT_SR = 24000
 MIN_SECONDS, MAX_SECONDS = 2.0, 30.0
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # a 30 s clip is far smaller even as uncompressed WAV
+FORMATS_HINT = "upload WAV, FLAC, OGG, MP3, M4A/AAC (e.g. iPhone Voice Memos) or WebM"
 
 
 class VoiceError(ValueError):
     pass
+
+
+def decode_audio(audio: bytes) -> tuple[np.ndarray, int]:
+    """Decode an uploaded clip to mono float32 samples and its sample rate.
+
+    soundfile (libsndfile) reads WAV, FLAC, OGG and MP3. Everything else, notably M4A/AAC from
+    phone voice recorders and WebM/Opus from browsers, goes through PyAV's bundled FFmpeg.
+    """
+    try:
+        data, sr = sf.read(io.BytesIO(audio), dtype="float32", always_2d=True)
+        return data.mean(axis=1), sr
+    except Exception:
+        pass
+    try:
+        with av.open(io.BytesIO(audio)) as container:
+            stream = next((s for s in container.streams if s.type == "audio"), None)
+            if stream is None:
+                raise VoiceError(f"the file has no audio track; {FORMATS_HINT}")
+            resampler = av.AudioResampler(format="flt", layout="mono")  # keeps the source rate
+            chunks, sr = [], 0
+            for frame in container.decode(stream):
+                sr = frame.sample_rate
+                chunks += [f.to_ndarray().reshape(-1) for f in resampler.resample(frame)]
+            chunks += [f.to_ndarray().reshape(-1) for f in resampler.resample(None)]
+    except (av.FFmpegError, ValueError) as e:
+        raise VoiceError(f"cannot decode audio ({e}); {FORMATS_HINT}") from e
+    if not chunks or not sr:
+        raise VoiceError(f"the file contains no audio samples; {FORMATS_HINT}")
+    return np.concatenate(chunks).astype(np.float32), sr
 
 
 @dataclass
@@ -68,11 +100,10 @@ class VoiceStore:
         transcript = transcript.strip()
         if not transcript:
             raise VoiceError("transcript of the reference audio is required")
-        try:
-            data, sr = sf.read(io.BytesIO(audio), dtype="float32", always_2d=True)
-        except Exception as e:
-            raise VoiceError(f"cannot decode audio ({e}); upload WAV, FLAC, OGG or MP3") from e
-        wav = torch.from_numpy(data.mean(axis=1, keepdims=True).T.copy())
+        if len(audio) > MAX_UPLOAD_BYTES:
+            raise VoiceError(f"audio file is larger than {MAX_UPLOAD_BYTES // 2**20} MB; a 3-30 s clip is enough")
+        samples, sr = decode_audio(audio)
+        wav = torch.from_numpy(samples).unsqueeze(0)
         if sr < 16000:
             raise VoiceError("reference audio sample rate must be at least 16 kHz")
         if sr != PROMPT_SR:

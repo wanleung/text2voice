@@ -44,6 +44,7 @@ dependencies = [
     "python-multipart",
     "httpx",
     "trafilatura",
+    "av",  # decodes M4A/AAC, ALAC, WebM/Opus and MP4 audio (bundles FFmpeg)
 ]
 
 [dependency-groups]

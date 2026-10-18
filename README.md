@@ -244,7 +244,11 @@ Two voices are bundled:
   English-heavy articles.
 - **`default`**: the CosyVoice sample voice, a Mandarin speaker.
 
-To add your own voice, register a clean native-speaker clip:
+To add your own voice, register a clean native-speaker clip: 6–12 seconds, said in the style you
+want articles read in, with a transcript that matches word for word. WAV, FLAC, OGG, MP3, M4A/AAC
+(iPhone Voice Memos, Android recorders) and WebM/Opus (browser recordings) are accepted, up to
+20 MB. Formats beyond libsndfile's go through PyAV, which bundles its own FFmpeg, so no system
+FFmpeg is needed.
 
 ```bash
 curl -s localhost:8020/v1/voices -F name=cantonese-f -F language=yue \
