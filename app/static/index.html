@@ -26,6 +26,11 @@
       <button data-tab="voices" class="tab">Voices</button>
     </nav>
     <input id="search" class="search" type="search" placeholder="Search library">
+    <div id="engine-filter" class="seg filter" role="group" aria-label="Show items by engine">
+      <button type="button" data-engine="" class="seg-btn active">All</button>
+      <button type="button" data-engine="cosyvoice" class="seg-btn">CosyVoice</button>
+      <button type="button" data-engine="qwen" class="seg-btn">Qwen</button>
+    </div>
     <button id="new-btn" class="primary">+ New</button>
     <button id="logout-btn" class="ghost" title="Sign out">Sign out</button>
   </header>
@@ -122,6 +127,7 @@
       <button class="primary" id="item-play">▶ Play</button>
       <a class="button" id="item-download">Download</a>
       <button id="item-share">Share</button>
+      <button id="item-again" title="Open New audio with this item's text and settings">Convert again</button>
       <button class="danger" id="item-delete">Delete</button>
     </div>
     <div id="item-share-box" class="share-box" hidden>

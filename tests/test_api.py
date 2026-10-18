@@ -343,3 +343,12 @@ def test_qwen_chunking_keeps_sentences_whole():
     from app.qwen import chunk_text
     chunks = chunk_text("第一句。" * 30 + "Second sentence here. " * 3, limit=40)
     assert all(len(c) <= 40 for c in chunks[:-1]) and "".join(chunks).replace(" ", "").startswith("第一句。第一句。")
+
+
+def test_library_filters_by_engine(qwen_client):
+    cv = qwen_client.post("/v1/jobs", json={"text": "One."}).json()
+    qw = qwen_client.post("/v1/jobs", json={"text": "Two.", "engine": "qwen"}).json()
+    ids = lambda q: [j["id"] for j in qwen_client.get(f"/v1/jobs{q}").json()["jobs"]]
+    assert ids("?engine=qwen") == [qw["id"]] and ids("?engine=cosyvoice") == [cv["id"]]
+    assert set(ids("")) == {cv["id"], qw["id"]}
+    assert qwen_client.get("/v1/jobs?engine=other").status_code == 422

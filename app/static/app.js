@@ -6,6 +6,9 @@ const player = $("#player");
 const LANG_NAMES = { en: "English", yue: "粵語", zh: "普通話" };
 let jobs = [], voices = [], defaultVoice = "default", currentItem = null, playingId = null;
 let source = "url", pollTimer = null;
+let engineFilter = "";  // "" (all), "cosyvoice" or "qwen"; remembered per browser
+let prefillSourceUrl = null;  // source of the item being converted again
+try { engineFilter = localStorage.getItem("t2v-engine-filter") || ""; } catch {}
 let qwenStatus = "not configured";  // from /health: "ok" when the Qwen worker is running
 const QWEN_OFF = "Qwen needs the Qwen worker running on the server (see README, \"Qwen\").";
 
@@ -87,6 +90,7 @@ document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () 
   $("#tab-library").hidden = b.dataset.tab !== "library";
   $("#tab-voices").hidden = b.dataset.tab !== "voices";
   $("#search").hidden = b.dataset.tab !== "library";
+  $("#engine-filter").hidden = b.dataset.tab !== "library";
   if (b.dataset.tab === "voices") renderVoices();
 }));
 
@@ -104,10 +108,18 @@ function schedulePoll() {
   pollTimer = setTimeout(() => loadJobs().catch(() => {}), active ? 3000 : 30000);
 }
 
+const ENGINE_NAMES = { cosyvoice: "CosyVoice", qwen: "Qwen" };
+
 function renderLibrary() {
   const q = $("#search").value.trim().toLowerCase();
-  const shown = q ? jobs.filter((j) => j.title.toLowerCase().includes(q) || (j.source_url || "").toLowerCase().includes(q)) : jobs;
+  const shown = jobs.filter((j) => (!engineFilter || (j.engine || "cosyvoice") === engineFilter)
+    && (!q || j.title.toLowerCase().includes(q) || (j.source_url || "").toLowerCase().includes(q)));
   $("#library-empty").hidden = jobs.length > 0;
+  if (jobs.length && !shown.length) {
+    const what = [engineFilter && ENGINE_NAMES[engineFilter], q && `matching "${q}"`].filter(Boolean).join(" ");
+    $("#library").innerHTML = `<p class="empty">No ${esc(what)} items.</p>`;
+    return;
+  }
   $("#library").innerHTML = shown.map((j) => {
     const done = j.status === "done";
     const active = j.status === "queued" || j.status === "running";
@@ -142,6 +154,15 @@ $("#library").addEventListener("click", (e) => {
   if (item) openItem(item.dataset.id);
 });
 $("#search").addEventListener("input", renderLibrary);
+
+function setEngineFilter(value) {
+  engineFilter = value;
+  document.querySelectorAll("#engine-filter .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.engine === value));
+  try { localStorage.setItem("t2v-engine-filter", value); } catch {}
+  renderLibrary();
+}
+document.querySelectorAll("#engine-filter .seg-btn").forEach((b) => b.addEventListener("click", () => setEngineFilter(b.dataset.engine)));
+setEngineFilter(engineFilter);
 
 // ---- player --------------------------------------------------------------------------------
 function togglePlay(id) {
@@ -215,6 +236,16 @@ $("#item-title").addEventListener("change", async () => {
   try { await patchItem({ title: $("#item-title").value }); toast("Renamed"); } catch (e) { toast(e.message); }
 });
 $("#item-play").addEventListener("click", () => { itemDialog.close(); togglePlay(currentItem.id); });
+$("#item-again").addEventListener("click", async () => {
+  const j = currentItem;
+  let text = "";
+  try { text = (await api(`/v1/jobs/${j.id}/text`)).text; } catch (e) { return toast(e.message); }
+  if (!text) return toast("This item's text wasn't stored, so it can't be converted again.");
+  itemDialog.close();
+  openNew({ text, title: j.title, voice: j.voice, language: j.language, speed: j.speed, format: j.format,
+            engine: j.engine || "cosyvoice", source_url: j.source_url });
+  if (!voices.some((v) => v.name === j.voice)) toast(`Voice "${j.voice}" no longer exists; pick another.`);
+});
 $("#item-share").addEventListener("click", async () => {
   if (!currentItem.share_url) { await patchItem({ shared: true }); renderShare(); }
   copyShare();
@@ -238,16 +269,44 @@ $("#item-delete").addEventListener("click", async () => {
 });
 
 // ---- new conversion ------------------------------------------------------------------------
-function openNew() {
+let prefilled = false;  // the form still holds a "Convert again" item
+
+function openNew(prefill) {
   $("#new-error").hidden = true;
+  if (prefilled && !prefill) {  // a cancelled Convert again: start from a clean form
+    $("#new-form").reset();
+    $("#new-text").value = "";
+    $("#char-count").textContent = "";
+    $("#speed-val").textContent = "1.0×";
+    source = "url";
+  }
+  prefilled = !!prefill;
+  prefillSourceUrl = null;
   $("#new-voice").innerHTML = voices.map((v) =>
     `<option value="${esc(v.name)}" ${v.name === defaultVoice ? "selected" : ""}>${esc(v.name)} (${esc(LANG_NAMES[v.language] || v.language)})</option>`).join("");
   setSource(source);
   const qwenOk = qwenStatus === "ok";
   $("#new-engine").querySelector('option[value="qwen"]').disabled = !qwenOk;
   if (!qwenOk) $("#new-engine").value = "cosyvoice";
+  if (prefill) applyPrefill(prefill);
   updateEngineNote();
   newDialog.showModal();
+}
+
+function applyPrefill(p) {
+  setSource("text");
+  $("#new-url").value = "";
+  $("#new-title").value = p.title;
+  $("#new-text").value = p.text;
+  $("#new-text").dispatchEvent(new Event("input"));
+  $("#text-label").hidden = false;
+  if (voices.some((v) => v.name === p.voice)) $("#new-voice").value = p.voice;
+  $("#new-lang").value = p.language;
+  $("#new-speed").value = p.speed;
+  $("#speed-val").textContent = `${(+p.speed).toFixed(1)}×`;
+  $("#new-format").value = p.format === "pcm" ? "wav" : p.format;
+  if (p.engine === "cosyvoice" || qwenStatus === "ok") $("#new-engine").value = p.engine;
+  prefillSourceUrl = p.source_url;
 }
 
 function updateEngineNote() {
@@ -260,15 +319,15 @@ function updateEngineNote() {
   $("#engine-note").hidden = !note;
 }
 $("#new-engine").addEventListener("change", updateEngineNote);
-$("#new-btn").addEventListener("click", openNew);
+$("#new-btn").addEventListener("click", () => openNew());
 
 function setSource(s) {
   source = s;
-  document.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.src === s));
+  document.querySelectorAll(".seg-btn[data-src]").forEach((b) => b.classList.toggle("active", b.dataset.src === s));
   $("#src-url").hidden = s !== "url";
   $("#text-label").hidden = s === "url" && !$("#new-text").value;
 }
-document.querySelectorAll(".seg-btn").forEach((b) => b.addEventListener("click", () => setSource(b.dataset.src)));
+document.querySelectorAll(".seg-btn[data-src]").forEach((b) => b.addEventListener("click", () => setSource(b.dataset.src)));
 $("#new-speed").addEventListener("input", () => ($("#speed-val").textContent = `${(+$("#new-speed").value).toFixed(1)}×`));
 $("#new-text").addEventListener("input", () => ($("#char-count").textContent = `${$("#new-text").value.length} characters`));
 
@@ -304,6 +363,7 @@ $("#convert-btn").addEventListener("click", async () => {
   if (text) {
     body.text = text;  // previewed (and possibly edited) article text wins over re-fetching
     if (source === "url" && url) body.source_url = url;
+    else if (prefillSourceUrl) body.source_url = prefillSourceUrl;
   } else if (source === "url" && url) body.url = url;
   else return newError(source === "url" ? "Enter a URL" : "Paste some text");
 

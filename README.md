@@ -43,8 +43,10 @@ so audio streams and downloads work like normal links.
 
 - **Library:** everything you've converted, newest first, with title, source site, duration,
   languages and live progress for running jobs. Play items in the bottom player, search by title or
-  source, and click an item to rename it, download it, read the text that was spoken, delete it,
-  or share it.
+  source, and filter by engine (All / CosyVoice / Qwen). Click an item to rename it, download it,
+  read the text that was spoken, delete it or share it. **Convert again** reopens New with the
+  item's text and settings, so you can redo it with another engine or voice and compare the two
+  side by side.
 - **New:** paste a URL (Preview shows the extracted article so you can trim it) or paste
   text/Markdown, then pick the voice, language, speed and format.
 - **Share:** creates an unguessable link (`/s/<token>`) that plays and downloads the audio
@@ -61,7 +63,7 @@ Library items are kept until you delete them. `T2V_JOB_TTL_HOURS` turns on autom
 | `POST` | `/v1/audio/speech` | OpenAI-compatible version of the above. |
 | `POST` | `/v1/jobs` | Queue an article from `text` or a `url` (up to 200k chars). Returns `202` with a job. |
 | `POST` | `/v1/fetch` | Preview the article text that would be extracted from a `url`. |
-| `GET` | `/v1/jobs?q=` | The library, newest first, optionally filtered by title or source. |
+| `GET` | `/v1/jobs?q=&engine=` | The library, newest first, optionally filtered by title or source and by engine. |
 | `GET` | `/v1/jobs/{id}` | Job status and progress. |
 | `GET` | `/v1/jobs/{id}/audio` | The finished audio. Add `?download=true` to get it as an attachment. |
 | `GET` | `/v1/jobs/{id}/text` | The text that was read aloud. |

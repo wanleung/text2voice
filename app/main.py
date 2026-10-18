@@ -228,9 +228,11 @@ async def create_job(req: JobRequest):
 
 
 @app.get("/v1/jobs", dependencies=auth)
-def list_jobs(limit: int = 200, q: str = ""):
-    """List jobs (the audio library), newest first. q filters by title or source URL."""
+def list_jobs(limit: int = 200, q: str = "", engine: Engine | None = None):
+    """List jobs (the audio library), newest first. q filters by title or source URL; engine by engine."""
     jobs = sorted(state["jobs"].jobs.values(), key=lambda j: j.created_at, reverse=True)
+    if engine:
+        jobs = [j for j in jobs if j.engine == engine]
     if q:
         needle = q.casefold()
         jobs = [j for j in jobs if needle in j.title.casefold() or needle in (j.source_url or "").casefold()]
